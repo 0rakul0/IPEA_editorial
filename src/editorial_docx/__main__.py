@@ -28,7 +28,7 @@ def main() -> int:
         "--output-json",
         type=Path,
         default=None,
-        help="Caminho do relatrio JSON (padrão: <entrada>_output.relatorio.json).",
+        help="Caminho do relatório JSON (padrão: <entrada>_output.relatorio.json).",
     )
     args = parser.parse_args()
 

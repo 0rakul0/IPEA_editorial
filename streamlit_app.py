@@ -284,7 +284,7 @@ with col_chat:
             st.download_button(
                 label="Baixar DOCX comentado",
                 data=output_bytes,
-                file_name=f"{Path(st.session_state.doc_path).stem}.comentado.docx",
+                file_name=f"{Path(st.session_state.doc_path).stem}_output.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
@@ -294,12 +294,6 @@ with col_chat:
             data=json.dumps(report, ensure_ascii=False, indent=2),
             file_name=f"{Path(st.session_state.doc_path).stem if st.session_state.doc_path else 'correcoes'}.relatorio.json",
             mime="application/json",
-        )
-        st.download_button(
-            label="Baixar DOCX comentado",
-            data=output_bytes,
-            file_name=f"{Path(st.session_state.doc_path).stem}_output.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
 with col_fix:
