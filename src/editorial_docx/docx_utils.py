@@ -164,6 +164,13 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
             paragraph_index = non_empty_indexes[0]
         if paragraph_index is None or paragraph_index < 0 or paragraph_index >= len(paragraphs):
             continue
+            
+        comment_lines = [f"[{item.category}] {item.message}"]
+        if item.issue_excerpt:
+            comment_lines.append(f"Trecho com problema: {item.issue_excerpt}")
+        if item.suggested_fix:
+            comment_lines.append(f"Sugestão: {item.suggested_fix}")
+        message = "\n".join(comment_lines)
 
         parts = [f"[{item.category}] {item.message}"]
         if item.issue_excerpt:

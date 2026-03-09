@@ -48,5 +48,35 @@ streamlit run streamlit_app.py
 - `src/editorial_docx/llm.py`: inicialização do modelo OpenAI via `.env`.
 - `src/editorial_docx/models.py`: modelos de dados de comentários e resposta.
 
+## Execução
+
+```
+python -m pip install -e .
+streamlit run streamlit_app.py
+```
+
+## Execução em linha de comando (lote)
+Para processar um arquivo diretamente (sem abrir o Streamlit):
+
+```
+PYTHONPATH=src python -m editorial_docx "testes/arquivo.docx"
+```
+
+## Saídas padrão:
+
+- <nome>_output.docx (para entrada DOCX);
+
+- <nome>_output.relatorio.json (comentários em JSON).
+
+## Estrutura principal
+- streamlit_app.py: interface de chat e visualização dos comentários.
+
+- src/editorial_docx/graph_chat.py: grafo dos agentes e coordenação da resposta.
+
+- src/editorial_docx/docx_utils.py: leitura do DOCX e aplicação dos comentários.
+
+- src/editorial_docx/llm.py: inicialização do modelo OpenAI via .env.
+
+- src/editorial_docx/models.py: modelos de dados de comentários e resposta.
 
 Para entrada PDF, o app gera relatório de comentários em JSON com referência de página/bloco.

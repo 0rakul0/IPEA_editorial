@@ -295,6 +295,12 @@ with col_chat:
             file_name=f"{Path(st.session_state.doc_path).stem if st.session_state.doc_path else 'correcoes'}.relatorio.json",
             mime="application/json",
         )
+        st.download_button(
+            label="Baixar DOCX comentado",
+            data=output_bytes,
+            file_name=f"{Path(st.session_state.doc_path).stem}_output.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
 
 with col_fix:
     st.subheader("Painel de Correção Assistida")

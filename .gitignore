@@ -27,3 +27,7 @@ dist/
 
 # Secrets
 .env
+
+# Generated review outputs
+*_output.docx
+*_output.relatorio.json
