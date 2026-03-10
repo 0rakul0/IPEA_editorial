@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel, ConfigDict, RootModel
 
 
@@ -23,3 +25,13 @@ class PromptProfile(BaseModel):
     key: str
     description: str
     instruction: str
+
+
+def agent_output_contract_text() -> str:
+    """Human-readable contract injected into prompts for consistent JSON output."""
+    schema = AgentCommentsPayload.model_json_schema()
+    return (
+        "Você DEVE responder APENAS com um JSON válido (sem markdown), "
+        "seguindo este JSON Schema: "
+        f"{json.dumps(schema, ensure_ascii=False)}"
+    )

@@ -25,7 +25,7 @@ class LoadedDocument:
     toc: list[str]
 
 
-_HEADING_RE = re.compile(r"^(\d+(?:\.\d+)*)\s+[A-ZÀ-Ü].+")
+_HEADING_RE = re.compile(r"^(\d+(?:\.?\d+)*)\s+[A-ZÀ-Ü].+")
 
 
 def _is_heading(text: str) -> bool:
