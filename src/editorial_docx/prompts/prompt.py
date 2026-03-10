@@ -13,6 +13,7 @@ PROMPT_FILES = {
     "tabelas_figuras": PROMPTS_DIR / "tabelas_figuras.md",
     "referencias": PROMPTS_DIR / "referencias.md",
     "conformidade_estilos": PROMPTS_DIR / "conformidade_estilos.md",
+    "gramatica_ortografia": PROMPTS_DIR / "gramatica_ortografia.md",
     "coordenador": PROMPTS_DIR / "coordenador.md",
 }
 
@@ -23,6 +24,7 @@ AGENT_ORDER = [
     "tabelas_figuras",
     "referencias",
     "conformidade_estilos",
+    "gramatica_ortografia",
 ]
 
 

@@ -171,13 +171,6 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
         if item.suggested_fix:
             comment_lines.append(f"Sugestão: {item.suggested_fix}")
         message = "\n".join(comment_lines)
-
-        parts = [f"[{item.category}] {item.message}"]
-        if item.issue_excerpt:
-            parts.append(f"Trecho com problema: {item.issue_excerpt}")
-        if item.suggested_fix:
-            parts.append(f"Sugestão: {item.suggested_fix}")
-        message = "\n".join(parts)
         author = f"Agente: {item.agent}"
 
         _append_comment(comments_root, comment_id, author=author, text=message)

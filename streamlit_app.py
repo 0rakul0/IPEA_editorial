@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
+from typing import Callable
 
 import streamlit as st
 
@@ -39,6 +41,7 @@ AGENT_LABELS = {
     "tabelas_figuras": "Tabelas/Figuras",
     "referencias": "Referências",
     "conformidade_estilos": "Conformidade de Estilos",
+    "gramatica_ortografia": "Gramática/Ortografia",
 }
 
 for key, default in {
@@ -82,6 +85,26 @@ def _build_rows() -> list[dict]:
             }
         )
     return rows
+
+
+def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) -> list[AgentComment]:
+    merged: list[AgentComment] = []
+    seen: set[tuple[str, str, int | None, str, str, str]] = set()
+
+    for c in [*existing, *incoming]:
+        key = (
+            c.agent,
+            c.category,
+            c.paragraph_index,
+            (c.message or "").strip(),
+            (c.issue_excerpt or "").strip(),
+            (c.suggested_fix or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(c)
+    return merged
 
 
 def _signature(rows: list[dict]) -> str:
@@ -132,26 +155,57 @@ def _build_correction_report(rows: list[dict]) -> list[dict]:
     return report
 
 
-def _run_review(question: str, agents: list[str]) -> tuple[str, list[AgentComment], list[str]]:
+def _run_review(
+    question: str,
+    agents: list[str],
+    on_progress: Callable[[str, int, int, int, int], None] | None = None,
+) -> tuple[str, list[AgentComment], list[str]]:
     logs: list[str] = []
 
     def on_agent_done(agent: str, new_count: int, total: int) -> None:
+        _ = (agent, new_count, total)
+
+    def on_agent_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
         label = AGENT_LABELS.get(agent, agent)
-        logs.append(f"- passou por `{label}`: +{new_count} comentário(s), total {total}")
+        line = (
+            (
+                f"- `{label}` lote {batch_idx}/{batch_total}: "
+                f"+{new_count} comentário(s), total {total}"
+            )
+        )
+        logs.append(line)
+        if on_progress is not None:
+            on_progress(agent, batch_idx, batch_total, new_count, total)
+
+    kwargs = {
+        "selected_agents": agents,
+        "on_agent_done": on_agent_done,
+    }
+    params = inspect.signature(run_conversation).parameters
+    if "on_agent_progress" in params:
+        kwargs["on_agent_progress"] = on_agent_progress
 
     result = run_conversation(
         st.session_state.paragraphs,
         st.session_state.refs,
         st.session_state.sections,
         question,
-        selected_agents=agents,
-        on_agent_done=on_agent_done,
+        **kwargs,
     )
     return result.answer, result.comments, logs
 
 
 uploaded = st.file_uploader("Ingestão do documento (.docx ou .pdf)", type=["docx", "pdf"])
 if uploaded is not None:
+    current_name = st.session_state.doc_path.name if st.session_state.doc_path else None
+    if current_name != uploaded.name:
+        st.session_state.messages = []
+        st.session_state.comments = []
+        st.session_state.agent_result_cache = {}
+        st.session_state.selected_comment_row = 0
+        st.session_state.correction_state = {}
+        st.session_state.comments_signature = ""
+
     tmp_dir = Path(".tmp")
     tmp_dir.mkdir(exist_ok=True)
     doc_path = tmp_dir / uploaded.name
@@ -176,12 +230,12 @@ with col_control:
         st.subheader("Execução")
     with t2:
         icon = "»" if st.session_state.control_collapsed else "«"
-        if st.button(icon, key="toggle_control", help="Minimizar/expandir painel", use_container_width=True):
+        if st.button(icon, key="toggle_control", help="Minimizar/expandir painel", width="stretch"):
             st.session_state.control_collapsed = not st.session_state.control_collapsed
             st.rerun()
 
     if st.session_state.control_collapsed:
-        if st.button("🧠", key="run_all_icon", help="Rodar todos os agentes", use_container_width=True):
+        if st.button("🧠", key="run_all_icon", help="Rodar todos os agentes", width="stretch"):
             st.session_state.pending_run = {
                 "question": "Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
                 "agents": AGENT_ORDER.copy(),
@@ -194,17 +248,18 @@ with col_control:
             "tabelas_figuras": "📊",
             "referencias": "📚",
             "conformidade_estilos": "🎨",
+            "gramatica_ortografia": "✍️",
         }
         for agent in AGENT_ORDER:
             label = AGENT_LABELS.get(agent, agent)
-            if st.button(icon_map.get(agent, "⚙️"), key=f"icon_{agent}", help=f"Rodar: {label}", use_container_width=True):
+            if st.button(icon_map.get(agent, "⚙️"), key=f"icon_{agent}", help=f"Rodar: {label}", width="stretch"):
                 st.session_state.pending_run = {
                     "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
                     "agents": [agent],
                     "source": f"agent:{agent}",
                 }
     else:
-        if st.button("Rodar todos os agentes", use_container_width=True):
+        if st.button("Rodar todos os agentes", width="stretch"):
             st.session_state.pending_run = {
                 "question": "Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
                 "agents": AGENT_ORDER.copy(),
@@ -214,7 +269,7 @@ with col_control:
         st.markdown("### Execução direta por agente")
         for agent in AGENT_ORDER:
             label = AGENT_LABELS.get(agent, agent)
-            if st.button(f"Rodar: {label}", key=f"run_{agent}", use_container_width=True):
+            if st.button(f"Rodar: {label}", key=f"run_{agent}", width="stretch"):
                 st.session_state.pending_run = {
                     "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
                     "agents": [agent],
@@ -228,11 +283,35 @@ with col_chat:
         run = st.session_state.pending_run
         st.session_state.pending_run = None
         st.session_state.messages.append({"role": "user", "content": f"[Ação rápida] {run['question']}"})
+        progress_header = st.empty()
+        progress_bar = st.progress(0, text="Iniciando revisão completa...")
+        progress_box = st.empty()
+        progress_lines: list[str] = []
+
+        def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
+            label = AGENT_LABELS.get(agent, agent)
+            pct = int((batch_idx / max(batch_total, 1)) * 100)
+            progress_header.info(
+                f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}"
+            )
+            progress_bar.progress(pct, text=f"Progresso do documento: lote {batch_idx}/{batch_total}")
+            line = f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}"
+            progress_lines.append(line)
+            tail = progress_lines[-14:]
+            progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(tail))
+
         with st.spinner("Executando agentes..."):
-            answer, comments, logs = _run_review(run["question"], run["agents"])
+            answer, comments, logs = _run_review(
+                run["question"],
+                run["agents"],
+                on_progress=_push_progress,
+            )
+        progress_header.success("Revisão concluída.")
+        progress_bar.progress(100, text="Processamento completo")
+        progress_box.empty()
         merged = answer + ("\n\n" + "\n".join(logs) if logs else "")
         st.session_state.messages.append({"role": "assistant", "content": merged})
-        st.session_state.comments = comments
+        st.session_state.comments = _merge_comments(st.session_state.comments, comments)
         if len(run["agents"]) == 1:
             agent = run["agents"][0]
             st.session_state.agent_result_cache[agent] = {
@@ -245,11 +324,35 @@ with col_chat:
     question = st.chat_input("Pergunte algo sobre o documento")
     if question and st.session_state.paragraphs:
         st.session_state.messages.append({"role": "user", "content": question})
+        progress_header = st.empty()
+        progress_bar = st.progress(0, text="Iniciando revisão completa...")
+        progress_box = st.empty()
+        progress_lines: list[str] = []
+
+        def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
+            label = AGENT_LABELS.get(agent, agent)
+            pct = int((batch_idx / max(batch_total, 1)) * 100)
+            progress_header.info(
+                f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}"
+            )
+            progress_bar.progress(pct, text=f"Progresso do documento: lote {batch_idx}/{batch_total}")
+            line = f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}"
+            progress_lines.append(line)
+            tail = progress_lines[-14:]
+            progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(tail))
+
         with st.spinner("Executando agentes..."):
-            answer, comments, logs = _run_review(question, AGENT_ORDER.copy())
+            answer, comments, logs = _run_review(
+                question,
+                AGENT_ORDER.copy(),
+                on_progress=_push_progress,
+            )
+        progress_header.success("Revisão concluída.")
+        progress_bar.progress(100, text="Processamento completo")
+        progress_box.empty()
         merged = answer + ("\n\n" + "\n".join(logs) if logs else "")
         st.session_state.messages.append({"role": "assistant", "content": merged})
-        st.session_state.comments = comments
+        st.session_state.comments = _merge_comments(st.session_state.comments, comments)
         st.rerun()
     elif question and not st.session_state.paragraphs:
         st.warning("Carregue um documento antes de conversar.")
@@ -314,7 +417,7 @@ with col_fix:
             unsafe_allow_html=True,
         )
 
-    if st.button("Abrir último resultado deste agente", key="agent_nav_open", use_container_width=True):
+    if st.button("Abrir último resultado deste agente", key="agent_nav_open", width="stretch"):
         cached = st.session_state.agent_result_cache.get(agent_cursor)
         if cached:
             st.session_state.messages.append(
@@ -326,7 +429,7 @@ with col_fix:
                     ),
                 }
             )
-            st.session_state.comments = cached["comments"]
+            st.session_state.comments = _merge_comments(st.session_state.comments, cached["comments"])
             st.rerun()
         else:
             st.info("Esse agente ainda não foi executado nesta sessão.")
