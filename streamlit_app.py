@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import os
 import json
 import inspect
 import hashlib
@@ -16,6 +17,57 @@ from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
 st.set_page_config(page_title="Editorial TD - Agentes", layout="wide")
 st.title("Revisão Editorial TD com Agentes")
+
+AGENT_LABELS = {
+    "metadados": "Metadados",
+    "sinopse_abstract": "Sinopse/Abstract",
+    "estrutura": "Estrutura",
+    "tabelas_figuras": "Tabelas/Figuras",
+    "referencias": "Referências",
+    "conformidade_estilos": "Conformidade de Estilos",
+    "gramatica_ortografia": "Gramática/Ortografia",
+}
+
+project_root = Path(__file__).resolve().parent
+env_path = project_root / ".env"
+
+with st.sidebar:
+    st.markdown("### OpenAI")
+    if env_path.exists():
+        st.caption("Arquivo .env detectado no repositório. Usando configuração local.")
+    else:
+        key_source = "variável de ambiente" if os.getenv("OPENAI_API_KEY") else "não configurada"
+        st.caption(f"Chave atual: {key_source}")
+        api_key_input = st.text_input(
+            "OPENAI_API_KEY",
+            type="password",
+            help="A chave fica somente nesta sessão e não é salva em disco.",
+        )
+        if st.button("Usar chave nesta sessão", use_container_width=True):
+            if api_key_input.strip():
+                os.environ["OPENAI_API_KEY"] = api_key_input.strip()
+                st.success("Chave carregada para esta sessão.")
+            else:
+                st.warning("Informe uma chave antes de confirmar.")
+
+    st.divider()
+    st.markdown("### Execução")
+    if st.button("Rodar todos os agentes", key="sidebar_run_all", use_container_width=True):
+        st.session_state.pending_run = {
+            "question": "Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
+            "agents": AGENT_ORDER.copy(),
+            "source": "control:all",
+        }
+
+    st.markdown("#### Execução direta por agente")
+    for agent in AGENT_ORDER:
+        label = AGENT_LABELS.get(agent, agent)
+        if st.button(f"Rodar: {label}", key=f"sidebar_run_{agent}", use_container_width=True):
+            st.session_state.pending_run = {
+                "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
+                "agents": [agent],
+                "source": f"agent:{agent}",
+            }
 
 CHAT_HEIGHT_VH = 72
 
@@ -35,16 +87,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-AGENT_LABELS = {
-    "metadados": "Metadados",
-    "sinopse_abstract": "Sinopse/Abstract",
-    "estrutura": "Estrutura",
-    "tabelas_figuras": "Tabelas/Figuras",
-    "referencias": "Referências",
-    "conformidade_estilos": "Conformidade de Estilos",
-    "gramatica_ortografia": "Gramática/Ortografia",
-}
-
 for key, default in {
     "messages": [],
     "comments": [],
@@ -63,7 +105,6 @@ for key, default in {
     "pending_run": None,
     "agent_result_cache": {},
     "agent_nav_idx": 0,
-    "control_collapsed": False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -229,60 +270,7 @@ if uploaded is not None:
         st.session_state.toc = loaded.toc
         st.session_state.doc_kind = loaded.kind
 
-control_w = 0.32 if st.session_state.control_collapsed else 0.85
-col_control, col_chat, col_fix = st.columns([control_w, 1.35, 1.1], gap="large")
-
-with col_control:
-    t1, t2 = st.columns([1, 1])
-    with t1:
-        st.subheader("Execução")
-    with t2:
-        icon = "»" if st.session_state.control_collapsed else "«"
-        if st.button(icon, key="toggle_control", help="Minimizar/expandir painel", width="stretch"):
-            st.session_state.control_collapsed = not st.session_state.control_collapsed
-            st.rerun()
-
-    if st.session_state.control_collapsed:
-        if st.button("🧠", key="run_all_icon", help="Rodar todos os agentes", width="stretch"):
-            st.session_state.pending_run = {
-                "question": "Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
-                "agents": AGENT_ORDER.copy(),
-                "source": "control:all",
-            }
-        icon_map = {
-            "metadados": "🏷️",
-            "sinopse_abstract": "📝",
-            "estrutura": "🧱",
-            "tabelas_figuras": "📊",
-            "referencias": "📚",
-            "conformidade_estilos": "🎨",
-            "gramatica_ortografia": "✍️",
-        }
-        for agent in AGENT_ORDER:
-            label = AGENT_LABELS.get(agent, agent)
-            if st.button(icon_map.get(agent, "⚙️"), key=f"icon_{agent}", help=f"Rodar: {label}", width="stretch"):
-                st.session_state.pending_run = {
-                    "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
-                    "agents": [agent],
-                    "source": f"agent:{agent}",
-                }
-    else:
-        if st.button("Rodar todos os agentes", width="stretch"):
-            st.session_state.pending_run = {
-                "question": "Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
-                "agents": AGENT_ORDER.copy(),
-                "source": "control:all",
-            }
-
-        st.markdown("### Execução direta por agente")
-        for agent in AGENT_ORDER:
-            label = AGENT_LABELS.get(agent, agent)
-            if st.button(f"Rodar: {label}", key=f"run_{agent}", width="stretch"):
-                st.session_state.pending_run = {
-                    "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
-                    "agents": [agent],
-                    "source": f"agent:{agent}",
-                }
+col_chat, col_fix = st.columns([1.7, 1.1], gap="large")
 
 with col_chat:
     st.subheader("Chat")
