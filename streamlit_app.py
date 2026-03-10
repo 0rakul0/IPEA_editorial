@@ -2,6 +2,7 @@
 
 import json
 import inspect
+import hashlib
 from pathlib import Path
 from typing import Callable
 
@@ -11,7 +12,7 @@ from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document
 from src.editorial_docx.graph_chat import run_conversation
 from src.editorial_docx.models import AgentComment
-from src.editorial_docx.prompts import AGENT_ORDER
+from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
 st.set_page_config(page_title="Editorial TD - Agentes", layout="wide")
 st.title("Revisão Editorial TD com Agentes")
@@ -52,6 +53,8 @@ for key, default in {
     "paragraphs": [],
     "refs": [],
     "doc_kind": None,
+    "doc_fingerprint": None,
+    "doc_profile": "GENERIC",
     "sections": [],
     "toc": [],
     "selected_comment_row": 0,
@@ -190,6 +193,7 @@ def _run_review(
         st.session_state.refs,
         st.session_state.sections,
         question,
+        profile_key=st.session_state.doc_profile,
         **kwargs,
     )
     return result.answer, result.comments, logs
@@ -197,8 +201,12 @@ def _run_review(
 
 uploaded = st.file_uploader("Ingestão do documento (.docx ou .pdf)", type=["docx", "pdf"])
 if uploaded is not None:
-    current_name = st.session_state.doc_path.name if st.session_state.doc_path else None
-    if current_name != uploaded.name:
+    file_bytes = uploaded.getvalue()
+    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
+    profile = detect_prompt_profile(uploaded.name)
+    st.session_state.doc_profile = profile.key
+
+    if st.session_state.doc_fingerprint != file_fingerprint:
         st.session_state.messages = []
         st.session_state.comments = []
         st.session_state.agent_result_cache = {}
@@ -206,20 +214,20 @@ if uploaded is not None:
         st.session_state.correction_state = {}
         st.session_state.comments_signature = ""
 
-    tmp_dir = Path(".tmp")
-    tmp_dir.mkdir(exist_ok=True)
-    doc_path = tmp_dir / uploaded.name
-    file_bytes = uploaded.getvalue()
-    doc_path.write_bytes(file_bytes)
+        tmp_dir = Path(".tmp")
+        tmp_dir.mkdir(exist_ok=True)
+        doc_path = tmp_dir / uploaded.name
+        doc_path.write_bytes(file_bytes)
 
-    loaded = load_document(doc_path)
-    st.session_state.doc_path = doc_path
-    st.session_state.doc_bytes = file_bytes
-    st.session_state.paragraphs = loaded.chunks
-    st.session_state.refs = loaded.refs
-    st.session_state.sections = loaded.sections
-    st.session_state.toc = loaded.toc
-    st.session_state.doc_kind = loaded.kind
+        loaded = load_document(doc_path)
+        st.session_state.doc_path = doc_path
+        st.session_state.doc_bytes = file_bytes
+        st.session_state.doc_fingerprint = file_fingerprint
+        st.session_state.paragraphs = loaded.chunks
+        st.session_state.refs = loaded.refs
+        st.session_state.sections = loaded.sections
+        st.session_state.toc = loaded.toc
+        st.session_state.doc_kind = loaded.kind
 
 control_w = 0.32 if st.session_state.control_collapsed else 0.85
 col_control, col_chat, col_fix = st.columns([control_w, 1.35, 1.1], gap="large")

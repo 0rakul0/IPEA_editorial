@@ -4,6 +4,8 @@ from pathlib import Path
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from .profiles import get_prompt_profile
+
 PROMPTS_DIR = Path(__file__).resolve().parent
 
 PROMPT_FILES = {
@@ -37,14 +39,17 @@ def load_agent_instruction(agent_name: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def build_agent_prompt(agent_name: str) -> ChatPromptTemplate:
+def build_agent_prompt(agent_name: str, profile_key: str | None = None) -> ChatPromptTemplate:
     instruction = load_agent_instruction(agent_name)
+    profile = get_prompt_profile(profile_key)
     return ChatPromptTemplate.from_messages(
         [
             ("system", instruction),
             (
                 "human",
                 (
+                    "Perfil do documento: {profile_description}\n"
+                    "Instrução de perfil: {profile_instruction}\n\n"
                     "Pergunta do usuário: {question}\n\n"
                     "Trecho do documento:\n{document_excerpt}\n\n"
                     "Retorne uma lista JSON. Cada item deve conter: "
@@ -53,17 +58,23 @@ def build_agent_prompt(agent_name: str) -> ChatPromptTemplate:
                 ),
             ),
         ]
+    ).partial(
+        profile_description=profile.description,
+        profile_instruction=profile.instruction,
     )
 
 
-def build_coordinator_prompt() -> ChatPromptTemplate:
+def build_coordinator_prompt(profile_key: str | None = None) -> ChatPromptTemplate:
     instruction = load_agent_instruction("coordenador")
+    profile = get_prompt_profile(profile_key)
     return ChatPromptTemplate.from_messages(
         [
             ("system", instruction),
             (
                 "human",
                 (
+                    "Perfil do documento: {profile_description}\n"
+                    "Instrução de perfil: {profile_instruction}\n\n"
                     "Pergunta do usuário: {question}\n\n"
                     "Trecho do documento:\n{document_excerpt}\n\n"
                     "Comentários dos agentes (JSON):\n{comments_json}\n\n"
@@ -71,4 +82,7 @@ def build_coordinator_prompt() -> ChatPromptTemplate:
                 ),
             ),
         ]
+    ).partial(
+        profile_description=profile.description,
+        profile_instruction=profile.instruction,
     )

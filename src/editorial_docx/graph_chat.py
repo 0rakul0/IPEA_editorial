@@ -11,12 +11,13 @@ from .context_selector import build_excerpt
 from .document_loader import Section
 from .llm import get_chat_model
 from .models import AgentComment, ConversationResult
-from .prompts import AGENT_ORDER, build_agent_prompt, build_coordinator_prompt
+from .prompts import AGENT_ORDER, AgentCommentsPayload, build_agent_prompt, build_coordinator_prompt
 
 
 class ChatState(TypedDict):
     question: str
     document_excerpt: str
+    profile_key: str
     comments: list[AgentComment]
     answer: str
 
@@ -57,36 +58,23 @@ def _serialize_comments(comments: list[AgentComment]) -> str:
 
 def _parse_comments(raw: str, agent: str) -> list[AgentComment]:
     try:
-        parsed = json.loads(raw)
+        parsed = AgentCommentsPayload.model_validate_json(raw)
     except Exception:
         return []
 
-    if not isinstance(parsed, list):
-        return []
-
     out: list[AgentComment] = []
-    for item in parsed:
-        if not isinstance(item, dict):
+    for item in parsed.root:
+        if not item.message:
             continue
-        message = str(item.get("message", "")).strip()
-        if not message:
-            continue
-        category = str(item.get("category", agent)).strip() or agent
-        paragraph_index = item.get("paragraph_index")
-        if isinstance(paragraph_index, str) and paragraph_index.isdigit():
-            paragraph_index = int(paragraph_index)
-        if not isinstance(paragraph_index, int):
-            paragraph_index = None
-        issue_excerpt = str(item.get("issue_excerpt", "")).strip()
-        suggested_fix = str(item.get("suggested_fix", "")).strip()
+        category = item.category or agent
         out.append(
             AgentComment(
                 agent=agent,
                 category=category,
-                message=message,
-                paragraph_index=paragraph_index,
-                issue_excerpt=issue_excerpt,
-                suggested_fix=suggested_fix,
+                message=item.message,
+                paragraph_index=item.paragraph_index,
+                issue_excerpt=item.issue_excerpt,
+                suggested_fix=item.suggested_fix,
             )
         )
     return out
@@ -98,7 +86,7 @@ def _agent_node(agent: str):
         if model is None:
             return {"comments": state.get("comments", [])}
 
-        prompt = build_agent_prompt(agent)
+        prompt = build_agent_prompt(agent, profile_key=state.get("profile_key"))
         payload = {
             "question": _sanitize_for_llm(state["question"]),
             "document_excerpt": _sanitize_for_llm(state["document_excerpt"]),
@@ -129,7 +117,7 @@ def _coordinator_node(state: ChatState) -> ChatState:
             answer = "Não foi possível consultar a LLM. Configure OPENAI_API_KEY no .env."
         return {"answer": answer}
 
-    prompt = build_coordinator_prompt()
+    prompt = build_coordinator_prompt(profile_key=state.get("profile_key"))
     payload = {
         "question": _sanitize_for_llm(state["question"]),
         "document_excerpt": _sanitize_for_llm(state["document_excerpt"]),
@@ -295,6 +283,7 @@ def run_conversation(
     selected_agents: list[str] | None = None,
     on_agent_done: Callable[[str, int, int], None] | None = None,
     on_agent_progress: Callable[[str, int, int, int, int], None] | None = None,
+    profile_key: str = "GENERIC",
 ) -> ConversationResult:
     agent_order = [a for a in (selected_agents or AGENT_ORDER) if a in AGENT_ORDER]
     if not paragraphs:
@@ -315,6 +304,7 @@ def run_conversation(
             initial_state: ChatState = {
                 "question": question,
                 "document_excerpt": excerpt,
+                "profile_key": profile_key,
                 "comments": final_comments,
                 "answer": "",
             }
@@ -346,6 +336,7 @@ def run_conversation(
             f"Total de trechos no documento: {len(paragraphs)}. "
             f"Agentes executados: {', '.join(agent_order)}."
         ),
+        "profile_key": profile_key,
         "comments": final_comments,
         "answer": "",
     }
