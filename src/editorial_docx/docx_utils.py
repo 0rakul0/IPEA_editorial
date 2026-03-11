@@ -120,16 +120,23 @@ def _attach_comment(paragraph: etree._Element, comment_id: int) -> None:
         paragraph.append(reference_run)
 
 
-def _append_comment(comments_root: etree._Element, comment_id: int, author: str, text: str) -> None:
+def _append_comment_paragraph(comment: etree._Element, text: str) -> None:
+    p = etree.SubElement(comment, _qname(W_NS, "p"))
+    r = etree.SubElement(p, _qname(W_NS, "r"))
+    t = etree.SubElement(r, _qname(W_NS, "t"))
+    if text.startswith(" ") or text.endswith(" ") or "  " in text:
+        t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+    t.text = text
+
+
+def _append_comment(comments_root: etree._Element, comment_id: int, author: str, paragraphs: list[str]) -> None:
     comment = etree.SubElement(comments_root, _qname(W_NS, "comment"))
     comment.set(_qname(W_NS, "id"), str(comment_id))
     comment.set(_qname(W_NS, "author"), author)
     comment.set(_qname(W_NS, "date"), datetime.now(timezone.utc).replace(microsecond=0).isoformat())
 
-    p = etree.SubElement(comment, _qname(W_NS, "p"))
-    r = etree.SubElement(p, _qname(W_NS, "r"))
-    t = etree.SubElement(r, _qname(W_NS, "t"))
-    t.text = text
+    for paragraph in paragraphs:
+        _append_comment_paragraph(comment, paragraph)
 
 
 def extract_paragraphs(input_path: Path) -> list[str]:
@@ -165,15 +172,22 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
         if paragraph_index is None or paragraph_index < 0 or paragraph_index >= len(paragraphs):
             continue
             
-        comment_lines = [f"[{item.category}] {item.message}"]
+        comment_lines = [
+            f"[{item.category}] {item.message}",
+        ]
         if item.issue_excerpt:
-            comment_lines.append(f"Trecho com problema: {item.issue_excerpt}")
+            comment_lines.extend(["Trecho com problema:", item.issue_excerpt])
         if item.suggested_fix:
-            comment_lines.append(f"Sugestão: {item.suggested_fix}")
-        message = "\n".join(comment_lines)
+            comment_lines.extend(["Sugestão:", item.suggested_fix])
+        if item.review_status:
+            comment_lines.append(f"Status do revisor: {item.review_status}")
+        if item.approved_text:
+            comment_lines.extend(["Texto final aprovado:", item.approved_text])
+        if item.reviewer_note:
+            comment_lines.extend(["Observação do revisor:", item.reviewer_note])
         author = f"Agente: {item.agent}"
 
-        _append_comment(comments_root, comment_id, author=author, text=message)
+        _append_comment(comments_root, comment_id, author=author, paragraphs=comment_lines)
         _attach_comment(paragraphs[paragraph_index], comment_id)
         comment_id += 1
 

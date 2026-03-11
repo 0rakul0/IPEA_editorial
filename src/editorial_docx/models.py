@@ -11,6 +11,9 @@ class AgentComment:
     paragraph_index: int | None = None
     issue_excerpt: str = ""
     suggested_fix: str = ""
+    review_status: str = ""
+    approved_text: str = ""
+    reviewer_note: str = ""
 
 
 @dataclass(slots=True)

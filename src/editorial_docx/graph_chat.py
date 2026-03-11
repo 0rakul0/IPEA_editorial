@@ -1,8 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
 from collections.abc import Callable
+from json import JSONDecodeError
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -14,12 +15,13 @@ from .models import AgentComment, ConversationResult
 from .prompts import AGENT_ORDER, AgentCommentsPayload, build_agent_prompt, build_coordinator_prompt
 
 
-class ChatState(TypedDict):
+class ChatState(TypedDict, total=False):
     question: str
     document_excerpt: str
     profile_key: str
     comments: list[AgentComment]
     answer: str
+    batch_status: str
 
 
 _CTRL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
@@ -56,11 +58,39 @@ def _serialize_comments(comments: list[AgentComment]) -> str:
     )
 
 
-def _parse_comments(raw: str, agent: str) -> list[AgentComment]:
+def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment], str]:
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return [], "resposta vazia"
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    parsed_input: object | str = cleaned
+    status = "json direto"
     try:
-        parsed = AgentCommentsPayload.model_validate_json(raw)
+        parsed_input = json.loads(cleaned)
+    except JSONDecodeError:
+        match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", cleaned)
+        if match:
+            try:
+                parsed_input = json.loads(match.group(1))
+                status = "json extraído"
+            except JSONDecodeError:
+                parsed_input = cleaned
+
+    if isinstance(parsed_input, dict):
+        for key in ("comments", "itens", "items", "results", "root", "data"):
+            value = parsed_input.get(key)
+            if isinstance(value, list):
+                parsed_input = value
+                status = f"lista em `{key}`"
+                break
+
+    try:
+        parsed = AgentCommentsPayload.model_validate(parsed_input)
     except Exception:
-        return []
+        return [], "resposta fora do schema"
 
     out: list[AgentComment] = []
     for item in parsed.root:
@@ -77,14 +107,25 @@ def _parse_comments(raw: str, agent: str) -> list[AgentComment]:
                 suggested_fix=item.suggested_fix,
             )
         )
-    return out
+
+    if not out:
+        return [], "json válido sem comentários"
+    return out, status
+
+
+def _parse_comments(raw: str, agent: str) -> list[AgentComment]:
+    items, _ = _parse_comments_with_status(raw, agent)
+    return items
 
 
 def _agent_node(agent: str):
     def run(state: ChatState) -> ChatState:
         model = get_chat_model()
         if model is None:
-            return {"comments": state.get("comments", [])}
+            return {
+                "comments": state.get("comments", []),
+                "batch_status": "modelo indisponível",
+            }
 
         prompt = build_agent_prompt(agent, profile_key=state.get("profile_key"))
         payload = {
@@ -95,13 +136,15 @@ def _agent_node(agent: str):
             response = (prompt | model).invoke(payload)
         except Exception as exc:
             if _is_json_body_error(exc):
-                # Keep pipeline alive for the next batches/agents.
-                return {"comments": state.get("comments", [])}
+                return {
+                    "comments": state.get("comments", []),
+                    "batch_status": "falha de payload da LLM",
+                }
             raise
         raw = response.content if isinstance(response.content, str) else str(response.content)
-        items = _parse_comments(raw, agent=agent)
+        items, status = _parse_comments_with_status(raw, agent=agent)
         merged = [*state.get("comments", []), *items]
-        return {"comments": merged}
+        return {"comments": merged, "batch_status": status}
 
     return run
 
@@ -271,7 +314,6 @@ def _agent_scope_indexes(agent: str, chunks: list[str], sections: list[Section])
     if agent == "gramatica_ortografia":
         return all_indexes
 
-    # estrutura e conformidade de estilos: visão completa do documento
     return all_indexes
 
 
@@ -283,6 +325,7 @@ def run_conversation(
     selected_agents: list[str] | None = None,
     on_agent_done: Callable[[str, int, int], None] | None = None,
     on_agent_progress: Callable[[str, int, int, int, int], None] | None = None,
+    on_agent_batch_status: Callable[[str, int, int, str], None] | None = None,
     profile_key: str = "GENERIC",
 ) -> ConversationResult:
     agent_order = [a for a in (selected_agents or AGENT_ORDER) if a in AGENT_ORDER]
@@ -321,11 +364,14 @@ def run_conversation(
                 current_comments = payload.get("comments", final_comments)
                 if isinstance(current_comments, list):
                     final_comments = current_comments
+                batch_status = str(payload.get("batch_status", "") or "")
                 total = len(final_comments)
                 new_count = max(total - previous_count, 0)
                 previous_count = total
                 if on_agent_done is not None:
                     on_agent_done(agent, new_count, total)
+                if on_agent_batch_status is not None:
+                    on_agent_batch_status(agent, batch_idx, len(batches), batch_status)
                 if on_agent_progress is not None:
                     on_agent_progress(agent, batch_idx, len(batches), new_count, total)
 

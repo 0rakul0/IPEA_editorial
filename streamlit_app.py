@@ -4,6 +4,9 @@ import os
 import json
 import inspect
 import hashlib
+import html
+import re
+import unicodedata
 from pathlib import Path
 from typing import Callable
 
@@ -199,27 +202,192 @@ def _build_correction_report(rows: list[dict]) -> list[dict]:
     return report
 
 
+def _set_status_value(key: str, value: str) -> None:
+    st.session_state[key] = value
+
+
+def _select_comment_row(index: int, visible_indexes: list[int], option_labels: list[str]) -> None:
+    if not visible_indexes:
+        st.session_state.selected_comment_row = 0
+        return
+
+    safe_index = max(0, min(index, len(visible_indexes) - 1))
+    st.session_state.selected_comment_row = visible_indexes[safe_index]
+    st.session_state.fix_select = option_labels[safe_index]
+
+
+def _find_next_pending_index(
+    rows: list[dict],
+    current_index: int,
+    visible_indexes: list[int],
+) -> int:
+    pending_indexes = [
+        idx
+        for idx in visible_indexes
+        if st.session_state.correction_state.get(str(idx), {}).get("status") != "resolvido"
+    ]
+    for idx in pending_indexes:
+        if idx > current_index:
+            return idx
+    if pending_indexes:
+        return pending_indexes[0]
+
+    for idx in visible_indexes:
+        if idx > current_index:
+            return idx
+    return visible_indexes[-1] if visible_indexes else current_index
+
+
+def _apply_suggestion_and_advance(
+    rows: list[dict],
+    final_key: str,
+    final_value: str,
+    status_key: str,
+    current_index: int,
+    visible_indexes: list[int],
+    option_labels: list[str],
+) -> None:
+    st.session_state[final_key] = final_value
+    st.session_state[status_key] = "resolvido"
+    next_row_index = _find_next_pending_index(rows, current_index, visible_indexes)
+    next_visible_pos = visible_indexes.index(next_row_index) if next_row_index in visible_indexes else 0
+    _select_comment_row(next_visible_pos, visible_indexes, option_labels)
+
+
+def _normalize_text_with_mapping(text: str) -> tuple[str, list[int]]:
+    normalized_chars: list[str] = []
+    mapping: list[int] = []
+
+    for idx, char in enumerate(text or ""):
+        decomposed = unicodedata.normalize("NFD", char)
+        stripped = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+        if not stripped:
+            continue
+
+        normalized = stripped.lower()
+        if normalized.isspace():
+            normalized_chars.append(" ")
+            mapping.append(idx)
+            continue
+
+        for part in normalized:
+            normalized_chars.append(part)
+            mapping.append(idx)
+
+    collapsed_chars: list[str] = []
+    collapsed_mapping: list[int] = []
+    prev_space = False
+    for char, idx in zip(normalized_chars, mapping):
+        is_space = char.isspace()
+        if is_space and prev_space:
+            continue
+        collapsed_chars.append(" " if is_space else char)
+        collapsed_mapping.append(idx)
+        prev_space = is_space
+
+    return "".join(collapsed_chars), collapsed_mapping
+
+
+def _find_excerpt_span(text: str, target: str) -> tuple[int, int] | None:
+    if not text or not target:
+        return None
+
+    direct = re.search(re.escape(target), text, flags=re.IGNORECASE)
+    if direct:
+        return direct.span()
+
+    normalized_text, text_mapping = _normalize_text_with_mapping(text)
+    normalized_target, _ = _normalize_text_with_mapping(target)
+    normalized_target = normalized_target.strip()
+    if not normalized_text or not normalized_target:
+        return None
+
+    start = normalized_text.find(normalized_target)
+    if start != -1:
+        end = start + len(normalized_target) - 1
+        return text_mapping[start], text_mapping[end] + 1
+
+    target_tokens = [token for token in normalized_target.split() if len(token) >= 3]
+    if not target_tokens:
+        return None
+
+    best_start = -1
+    best_score = 0
+    for token in target_tokens:
+        token_pos = normalized_text.find(token)
+        if token_pos == -1:
+            continue
+        score = sum(1 for part in target_tokens if part in normalized_text[token_pos : token_pos + len(normalized_target) + 80])
+        if score > best_score:
+            best_score = score
+            best_start = token_pos
+
+    if best_start == -1 or best_score == 0:
+        return None
+
+    end = min(best_start + len(normalized_target) + 40, len(text_mapping) - 1)
+    return text_mapping[best_start], text_mapping[end] + 1
+
+
+def _render_target_excerpt(paragraph: str, issue_excerpt: str) -> None:
+    text = paragraph or ""
+    target = (issue_excerpt or "").strip()
+
+    if not target:
+        st.text_area("Trecho-alvo", value=text, height=180, disabled=True)
+        return
+
+    span = _find_excerpt_span(text, target)
+    if not span:
+        st.text_area("Trecho-alvo", value=text, height=180, disabled=True)
+        return
+
+    start, end = span
+    before = html.escape(text[:start])
+    highlighted = html.escape(text[start:end])
+    after = html.escape(text[end:])
+
+    st.markdown("Trecho-alvo")
+    st.markdown(
+        (
+            "<div style='border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 0.5rem; "
+            "padding: 0.75rem 1rem; background: rgb(249, 250, 251); "
+            "font-family: \"Source Code Pro\", monospace; white-space: pre-wrap; line-height: 1.6;'>"
+            f"{before}<mark style='background-color: #fff3a3; padding: 0.05rem 0.15rem;'>{highlighted}</mark>{after}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def _run_review(
     question: str,
     agents: list[str],
-    on_progress: Callable[[str, int, int, int, int], None] | None = None,
+    on_progress: Callable[[str, int, int, int, int, str], None] | None = None,
 ) -> tuple[str, list[AgentComment], list[str]]:
     logs: list[str] = []
+    batch_statuses: dict[tuple[str, int], str] = {}
 
     def on_agent_done(agent: str, new_count: int, total: int) -> None:
         _ = (agent, new_count, total)
 
+    def on_agent_batch_status(agent: str, batch_idx: int, batch_total: int, status: str) -> None:
+        _ = batch_total
+        batch_statuses[(agent, batch_idx)] = status
+
     def on_agent_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
         label = AGENT_LABELS.get(agent, agent)
+        status = batch_statuses.get((agent, batch_idx), "")
+        suffix = f" | {status}" if status and status not in {"json direto", "lista em `comments`"} else ""
         line = (
             (
                 f"- `{label}` lote {batch_idx}/{batch_total}: "
-                f"+{new_count} comentário(s), total {total}"
+                f"+{new_count} comentário(s), total {total}{suffix}"
             )
         )
         logs.append(line)
         if on_progress is not None:
-            on_progress(agent, batch_idx, batch_total, new_count, total)
+            on_progress(agent, batch_idx, batch_total, new_count, total, status)
 
     kwargs = {
         "selected_agents": agents,
@@ -228,6 +396,8 @@ def _run_review(
     params = inspect.signature(run_conversation).parameters
     if "on_agent_progress" in params:
         kwargs["on_agent_progress"] = on_agent_progress
+    if "on_agent_batch_status" in params:
+        kwargs["on_agent_batch_status"] = on_agent_batch_status
 
     result = run_conversation(
         st.session_state.paragraphs,
@@ -284,14 +454,15 @@ with col_chat:
         progress_box = st.empty()
         progress_lines: list[str] = []
 
-        def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
+        def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int, status: str) -> None:
             label = AGENT_LABELS.get(agent, agent)
             pct = int((batch_idx / max(batch_total, 1)) * 100)
+            suffix = f" | {status}" if status and status not in {"json direto", "lista em `comments`"} else ""
             progress_header.info(
-                f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}"
+                f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}{suffix}"
             )
             progress_bar.progress(pct, text=f"Progresso do documento: lote {batch_idx}/{batch_total}")
-            line = f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}"
+            line = f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}{suffix}"
             progress_lines.append(line)
             tail = progress_lines[-14:]
             progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(tail))
@@ -325,14 +496,15 @@ with col_chat:
         progress_box = st.empty()
         progress_lines: list[str] = []
 
-        def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
+        def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int, status: str) -> None:
             label = AGENT_LABELS.get(agent, agent)
             pct = int((batch_idx / max(batch_total, 1)) * 100)
+            suffix = f" | {status}" if status and status not in {"json direto", "lista em `comments`"} else ""
             progress_header.info(
-                f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}"
+                f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}{suffix}"
             )
             progress_bar.progress(pct, text=f"Progresso do documento: lote {batch_idx}/{batch_total}")
-            line = f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}"
+            line = f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}{suffix}"
             progress_lines.append(line)
             tail = progress_lines[-14:]
             progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(tail))
@@ -362,6 +534,7 @@ with col_chat:
     rows = _build_rows()
     if rows:
         _ensure_correction_state(rows)
+        report = _build_correction_report(rows)
         st.subheader("Comentários dos agentes")
         st.dataframe(rows, width="stretch")
 
@@ -376,8 +549,11 @@ with col_chat:
                         message=r["comentario"],
                         issue_excerpt=r["trecho_com_problema"],
                         suggested_fix=r["como_deve_ficar"],
+                        review_status=r.get("status", ""),
+                        approved_text=r.get("texto_final_aprovado", ""),
+                        reviewer_note=r.get("observacao", ""),
                     )
-                    for r in rows
+                    for r in report
                 ],
             )
             st.download_button(
@@ -387,7 +563,6 @@ with col_chat:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
-        report = _build_correction_report(rows)
         st.download_button(
             label="Baixar relatório de correções (JSON)",
             data=json.dumps(report, ensure_ascii=False, indent=2),
@@ -436,32 +611,89 @@ with col_fix:
         st.info("Execute uma revisão no chat ou no painel de controle para carregar itens.")
     else:
         _ensure_correction_state(rows)
+        status_counts = {
+            "pendente": sum(1 for v in st.session_state.correction_state.values() if v.get("status") == "pendente"),
+            "em_revisao": sum(1 for v in st.session_state.correction_state.values() if v.get("status") == "em_revisao"),
+            "resolvido": sum(1 for v in st.session_state.correction_state.values() if v.get("status") == "resolvido"),
+        }
+        st.caption(
+            "Status: "
+            f"{status_counts['pendente']} pendente(s) | "
+            f"{status_counts['em_revisao']} em revisão | "
+            f"{status_counts['resolvido']} resolvido(s)"
+        )
 
-        options = []
+        filter_a, filter_b, filter_c = st.columns([1.2, 1.2, 1])
+        with filter_a:
+            agent_filter = st.multiselect(
+                "Filtrar agentes",
+                options=sorted({AGENT_LABELS.get(row["agente"], row["agente"]) for row in rows}),
+                default=[],
+                key="fix_agent_filter",
+            )
+        with filter_b:
+            category_filter = st.multiselect(
+                "Filtrar categorias",
+                options=sorted({row["categoria"] for row in rows}),
+                default=[],
+                key="fix_category_filter",
+            )
+        with filter_c:
+            pending_only = st.checkbox("Só pendentes", key="fix_pending_only")
+
+        visible_indexes: list[int] = []
+        option_labels: list[str] = []
         for i, row in enumerate(rows):
-            snippet = row["comentario"][:65].replace("\n", " ")
-            options.append(f"{i+1}. {row['referencia']} | {row['categoria']} | {snippet}")
+            agent_label = AGENT_LABELS.get(row["agente"], row["agente"])
+            state = st.session_state.correction_state.get(str(i), {})
+            if agent_filter and agent_label not in agent_filter:
+                continue
+            if category_filter and row["categoria"] not in category_filter:
+                continue
+            if pending_only and state.get("status") == "resolvido":
+                continue
 
-        if st.session_state.selected_comment_row >= len(options):
-            st.session_state.selected_comment_row = 0
+            snippet = row["comentario"][:65].replace("\n", " ")
+            visible_indexes.append(i)
+            option_labels.append(f"{i+1}. {row['referencia']} | {row['categoria']} | {snippet}")
+
+        if not visible_indexes:
+            st.info("Nenhum item corresponde aos filtros atuais.")
+            st.stop()
+
+        if st.session_state.selected_comment_row not in visible_indexes:
+            st.session_state.selected_comment_row = visible_indexes[0]
+            st.session_state.fix_select = option_labels[0]
+
+        current_visible_pos = visible_indexes.index(st.session_state.selected_comment_row)
 
         nav_prev, nav_next, nav_info = st.columns([1, 1, 2])
         with nav_prev:
-            if st.button("Anterior", key="fix_prev", disabled=st.session_state.selected_comment_row <= 0):
-                st.session_state.selected_comment_row -= 1
+            st.button(
+                "Anterior",
+                key="fix_prev",
+                disabled=current_visible_pos <= 0,
+                on_click=_select_comment_row,
+                args=(current_visible_pos - 1, visible_indexes, option_labels),
+            )
         with nav_next:
-            if st.button("Próximo", key="fix_next", disabled=st.session_state.selected_comment_row >= len(options) - 1):
-                st.session_state.selected_comment_row += 1
+            st.button(
+                "Próximo",
+                key="fix_next",
+                disabled=current_visible_pos >= len(visible_indexes) - 1,
+                on_click=_select_comment_row,
+                args=(current_visible_pos + 1, visible_indexes, option_labels),
+            )
         with nav_info:
-            st.caption(f"Item {st.session_state.selected_comment_row + 1} de {len(options)}")
+            st.caption(f"Item {current_visible_pos + 1} de {len(visible_indexes)}")
 
         selected_option = st.selectbox(
             "Selecionar item:",
-            options,
-            index=st.session_state.selected_comment_row,
+            option_labels,
+            index=current_visible_pos,
             key="fix_select",
         )
-        st.session_state.selected_comment_row = options.index(selected_option)
+        st.session_state.selected_comment_row = visible_indexes[option_labels.index(selected_option)]
 
         idx = st.session_state.selected_comment_row
         row = rows[idx]
@@ -498,14 +730,34 @@ with col_fix:
 
         b1, b2, b3 = st.columns(3)
         with b1:
-            if st.button("Usar sugestão", key="fix_use"):
-                st.session_state[final_key] = row["como_deve_ficar"] or st.session_state[final_key]
+            st.button(
+                "Usar sugestão",
+                key="fix_use",
+                on_click=_apply_suggestion_and_advance,
+                args=(
+                    rows,
+                    final_key,
+                    row["como_deve_ficar"] or st.session_state.get(final_key, ""),
+                    status_key,
+                    idx,
+                    visible_indexes,
+                    option_labels,
+                ),
+            )
         with b2:
-            if st.button("Marcar resolvido", key="fix_done"):
-                st.session_state[status_key] = "resolvido"
+            st.button(
+                "Marcar resolvido",
+                key="fix_done",
+                on_click=_set_status_value,
+                args=(status_key, "resolvido"),
+            )
         with b3:
-            if st.button("Reabrir", key="fix_reopen"):
-                st.session_state[status_key] = "em_revisao"
+            st.button(
+                "Reabrir",
+                key="fix_reopen",
+                on_click=_set_status_value,
+                args=(status_key, "em_revisao"),
+            )
 
         state["final_text"] = st.session_state.get(final_key, "")
         state["status"] = st.session_state.get(status_key, "pendente")
@@ -514,13 +766,20 @@ with col_fix:
         pidx = row["indice_trecho"]
         st.markdown("### Contexto do documento")
         if isinstance(pidx, int) and 0 <= pidx < len(st.session_state.paragraphs):
-            st.caption("Trecho-alvo")
-            st.code(st.session_state.paragraphs[pidx], language="text")
+            _render_target_excerpt(st.session_state.paragraphs[pidx], row["trecho_com_problema"])
             if pidx - 1 >= 0:
-                st.caption("Trecho anterior")
-                st.text(st.session_state.paragraphs[pidx - 1][:900])
+                st.text_area(
+                    "Trecho anterior",
+                    value=st.session_state.paragraphs[pidx - 1],
+                    height=180,
+                    disabled=True,
+                )
             if pidx + 1 < len(st.session_state.paragraphs):
-                st.caption("Trecho seguinte")
-                st.text(st.session_state.paragraphs[pidx + 1][:900])
+                st.text_area(
+                    "Trecho seguinte",
+                    value=st.session_state.paragraphs[pidx + 1],
+                    height=180,
+                    disabled=True,
+                )
         else:
             st.caption("Sem índice de trecho para contexto.")
