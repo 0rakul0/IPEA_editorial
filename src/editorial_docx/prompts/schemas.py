@@ -13,6 +13,8 @@ class AgentCommentPayload(BaseModel):
     paragraph_index: int | None = None
     issue_excerpt: str = ""
     suggested_fix: str = ""
+    auto_apply: bool = False
+    format_spec: str = ""
 
 
 class AgentCommentsPayload(RootModel[list[AgentCommentPayload]]):

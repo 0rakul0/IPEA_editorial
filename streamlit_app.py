@@ -29,6 +29,7 @@ AGENT_LABELS = {
     "referencias": "Referências",
     "conformidade_estilos": "Conformidade de Estilos",
     "gramatica_ortografia": "Gramática/Ortografia",
+    "tipografia": "Tipografia",
 }
 
 project_root = Path(__file__).resolve().parent
@@ -115,13 +116,16 @@ for key, default in {
 
 def _build_rows() -> list[dict]:
     rows = []
-    for c in st.session_state.comments:
+    for comment_idx, c in enumerate(st.session_state.comments):
+        if c.auto_apply:
+            continue
         ref = "sem referência"
         if isinstance(c.paragraph_index, int) and 0 <= c.paragraph_index < len(st.session_state.refs):
             ref = st.session_state.refs[c.paragraph_index]
 
         rows.append(
             {
+                "comment_idx": comment_idx,
                 "agente": c.agent,
                 "categoria": c.category,
                 "referencia": ref,
@@ -129,6 +133,8 @@ def _build_rows() -> list[dict]:
                 "comentario": c.message,
                 "trecho_com_problema": c.issue_excerpt,
                 "como_deve_ficar": c.suggested_fix,
+                "auto_aplicar": c.auto_apply,
+                "format_spec": c.format_spec,
             }
         )
     return rows
@@ -136,7 +142,7 @@ def _build_rows() -> list[dict]:
 
 def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) -> list[AgentComment]:
     merged: list[AgentComment] = []
-    seen: set[tuple[str, str, int | None, str, str, str]] = set()
+    seen: set[tuple[str, str, int | None, str, str, str, bool, str]] = set()
 
     for c in [*existing, *incoming]:
         key = (
@@ -146,6 +152,8 @@ def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) 
             (c.message or "").strip(),
             (c.issue_excerpt or "").strip(),
             (c.suggested_fix or "").strip(),
+            c.auto_apply,
+            (c.format_spec or "").strip(),
         )
         if key in seen:
             continue
@@ -157,12 +165,15 @@ def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) 
 def _signature(rows: list[dict]) -> str:
     base = [
         (
+            str(r["comment_idx"]),
             r["agente"],
             r["categoria"],
             str(r["indice_trecho"]),
             r["comentario"],
             r["trecho_com_problema"],
             r["como_deve_ficar"],
+            r.get("auto_aplicar", False),
+            r.get("format_spec", ""),
         )
         for r in rows
     ]
@@ -180,10 +191,12 @@ def _ensure_correction_state(rows: list[dict]) -> None:
         key = str(idx)
         if key not in st.session_state.correction_state:
             initial = row["como_deve_ficar"] or row["trecho_com_problema"] or ""
+            initial_status = "resolvido" if row.get("auto_aplicar") else "pendente"
+            initial_note = "Aplicado automaticamente pelo revisor de tipografia." if row.get("auto_aplicar") else ""
             st.session_state.correction_state[key] = {
-                "status": "pendente",
+                "status": initial_status,
                 "final_text": initial,
-                "observacao": "",
+                "observacao": initial_note,
             }
 
 
@@ -200,6 +213,34 @@ def _build_correction_report(rows: list[dict]) -> list[dict]:
             }
         )
     return report
+
+
+def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
+    overrides: dict[int, dict] = {int(row["comment_idx"]): row for row in report_rows}
+    export_comments: list[AgentComment] = []
+
+    for idx, comment in enumerate(st.session_state.comments):
+        override = overrides.get(idx)
+        if override is None:
+            export_comments.append(comment)
+            continue
+
+        export_comments.append(
+            AgentComment(
+                agent=override["agente"],
+                category=override["categoria"],
+                paragraph_index=override["indice_trecho"],
+                message=override["comentario"],
+                issue_excerpt=override["trecho_com_problema"],
+                suggested_fix=override["como_deve_ficar"],
+                auto_apply=override.get("auto_aplicar", False),
+                format_spec=override.get("format_spec", ""),
+                review_status=override.get("status", ""),
+                approved_text=override.get("texto_final_aprovado", ""),
+                reviewer_note=override.get("observacao", ""),
+            )
+        )
+    return export_comments
 
 
 def _set_status_value(key: str, value: str) -> None:
@@ -541,20 +582,7 @@ with col_chat:
         if st.session_state.doc_path and st.session_state.doc_kind == "docx":
             output_bytes = apply_comments_to_docx(
                 st.session_state.doc_path,
-                [
-                    AgentComment(
-                        agent=r["agente"],
-                        category=r["categoria"],
-                        paragraph_index=r["indice_trecho"],
-                        message=r["comentario"],
-                        issue_excerpt=r["trecho_com_problema"],
-                        suggested_fix=r["como_deve_ficar"],
-                        review_status=r.get("status", ""),
-                        approved_text=r.get("texto_final_aprovado", ""),
-                        reviewer_note=r.get("observacao", ""),
-                    )
-                    for r in report
-                ],
+                _build_export_comments(report),
             )
             st.download_button(
                 label="Baixar DOCX comentado",
@@ -569,6 +597,18 @@ with col_chat:
             file_name=f"{Path(st.session_state.doc_path).stem if st.session_state.doc_path else 'correcoes'}.relatorio.json",
             mime="application/json",
         )
+    elif st.session_state.comments:
+        if st.session_state.doc_path and st.session_state.doc_kind == "docx":
+            output_bytes = apply_comments_to_docx(
+                st.session_state.doc_path,
+                st.session_state.comments,
+            )
+            st.download_button(
+                label="Baixar DOCX com ajustes automáticos",
+                data=output_bytes,
+                file_name=f"{Path(st.session_state.doc_path).stem}_output.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
 
 with col_fix:
     st.subheader("Painel de Correção Assistida")
@@ -699,12 +739,15 @@ with col_fix:
         row = rows[idx]
         state_key = str(idx)
         state = st.session_state.correction_state[state_key]
+        is_auto_apply = bool(row.get("auto_aplicar"))
 
         resolved = sum(1 for v in st.session_state.correction_state.values() if v.get("status") == "resolvido")
         st.progress(resolved / len(rows), text=f"{resolved}/{len(rows)} itens resolvidos")
 
         st.markdown(f"**Agente:** `{AGENT_LABELS.get(row['agente'], row['agente'])}` | **Categoria:** `{row['categoria']}`")
         st.markdown(f"**Referência:** {row['referencia']}")
+        if is_auto_apply:
+            st.caption("Este item será aplicado automaticamente no DOCX exportado.")
         st.info(row["comentario"])
 
         st.markdown("**Trecho com problema**")
@@ -724,15 +767,16 @@ with col_fix:
         if note_key not in st.session_state:
             st.session_state[note_key] = state.get("observacao", "")
 
-        st.text_area("Versão final (editável)", key=final_key, height=180)
-        st.selectbox("Status", ["pendente", "em_revisao", "resolvido"], key=status_key)
-        st.text_area("Observação do revisor", key=note_key, height=90)
+        st.text_area("Versão final (editável)", key=final_key, height=180, disabled=is_auto_apply)
+        st.selectbox("Status", ["pendente", "em_revisao", "resolvido"], key=status_key, disabled=is_auto_apply)
+        st.text_area("Observação do revisor", key=note_key, height=90, disabled=is_auto_apply)
 
         b1, b2, b3 = st.columns(3)
         with b1:
             st.button(
                 "Usar sugestão",
                 key="fix_use",
+                disabled=is_auto_apply,
                 on_click=_apply_suggestion_and_advance,
                 args=(
                     rows,
@@ -748,6 +792,7 @@ with col_fix:
             st.button(
                 "Marcar resolvido",
                 key="fix_done",
+                disabled=is_auto_apply,
                 on_click=_set_status_value,
                 args=(status_key, "resolvido"),
             )
@@ -755,6 +800,7 @@ with col_fix:
             st.button(
                 "Reabrir",
                 key="fix_reopen",
+                disabled=is_auto_apply,
                 on_click=_set_status_value,
                 args=(status_key, "em_revisao"),
             )

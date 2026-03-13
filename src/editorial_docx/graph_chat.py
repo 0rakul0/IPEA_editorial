@@ -26,6 +26,18 @@ class ChatState(TypedDict, total=False):
 
 _CTRL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 _SURROGATE_RE = re.compile(r"[\uD800-\uDFFF]")
+_REF_TYPE_RE = re.compile(r"\btipo=([a-z_]+)\b", re.IGNORECASE)
+_ALLOWED_TYPOGRAPHY_KEYS = {
+    "font",
+    "size_pt",
+    "bold",
+    "italic",
+    "align",
+    "space_before_pt",
+    "space_after_pt",
+    "line_spacing",
+    "left_indent_pt",
+}
 
 
 def _sanitize_for_llm(text: str) -> str:
@@ -50,6 +62,8 @@ def _serialize_comments(comments: list[AgentComment]) -> str:
                 "paragraph_index": c.paragraph_index,
                 "issue_excerpt": c.issue_excerpt,
                 "suggested_fix": c.suggested_fix,
+                "auto_apply": c.auto_apply,
+                "format_spec": c.format_spec,
             }
             for c in comments
         ],
@@ -105,6 +119,8 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
                 paragraph_index=item.paragraph_index,
                 issue_excerpt=item.issue_excerpt,
                 suggested_fix=item.suggested_fix,
+                auto_apply=item.auto_apply,
+                format_spec=item.format_spec,
             )
         )
 
@@ -116,6 +132,187 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
 def _parse_comments(raw: str, agent: str) -> list[AgentComment]:
     items, _ = _parse_comments_with_status(raw, agent)
     return items
+
+
+def _normalized_text(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().casefold())
+
+
+def _parse_format_spec(raw: str) -> dict[str, str]:
+    spec: dict[str, str] = {}
+    for part in (raw or "").split(";"):
+        piece = part.strip()
+        if not piece or "=" not in piece:
+            continue
+        key, value = piece.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key and value:
+            spec[key] = value
+    return spec
+
+
+def _ref_block_type(ref: str) -> str:
+    match = _REF_TYPE_RE.search(ref or "")
+    return match.group(1).lower() if match else ""
+
+
+def _find_excerpt_index(excerpt: str, candidate_indexes: list[int], chunks: list[str]) -> int | None:
+    needle = _normalized_text(excerpt)
+    if not needle:
+        return None
+
+    for idx in candidate_indexes:
+        if 0 <= idx < len(chunks) and needle in _normalized_text(chunks[idx]):
+            return idx
+    return None
+
+
+def _remap_comment_index(comment: AgentComment, batch_indexes: list[int], chunks: list[str]) -> AgentComment:
+    paragraph_index = comment.paragraph_index
+
+    if paragraph_index is None:
+        paragraph_index = _find_excerpt_index(comment.issue_excerpt, batch_indexes, chunks)
+        if paragraph_index is None and batch_indexes:
+            paragraph_index = batch_indexes[0]
+    elif paragraph_index not in batch_indexes and 0 <= paragraph_index < len(batch_indexes):
+        paragraph_index = batch_indexes[paragraph_index]
+
+    if paragraph_index is not None and batch_indexes and paragraph_index not in batch_indexes:
+        matched = _find_excerpt_index(comment.issue_excerpt, batch_indexes, chunks)
+        if matched is not None:
+            paragraph_index = matched
+
+    matched = _find_excerpt_index(comment.issue_excerpt, batch_indexes, chunks)
+    if matched is not None:
+        paragraph_index = matched
+
+    return AgentComment(
+        agent=comment.agent,
+        category=comment.category,
+        message=comment.message,
+        paragraph_index=paragraph_index,
+        issue_excerpt=comment.issue_excerpt,
+        suggested_fix=comment.suggested_fix,
+        auto_apply=comment.auto_apply,
+        format_spec=comment.format_spec,
+        review_status=comment.review_status,
+        approved_text=comment.approved_text,
+        reviewer_note=comment.reviewer_note,
+    )
+
+
+def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], refs: list[str]) -> bool:
+    if not (comment.message or "").strip():
+        return False
+
+    if comment.issue_excerpt and comment.suggested_fix and not comment.auto_apply:
+        if _normalized_text(comment.issue_excerpt) == _normalized_text(comment.suggested_fix):
+            return False
+
+    ref = ""
+    if isinstance(comment.paragraph_index, int) and 0 <= comment.paragraph_index < len(refs):
+        ref = refs[comment.paragraph_index]
+    block_type = _ref_block_type(ref)
+
+    if agent == "gramatica_ortografia" and block_type in {
+        "direct_quote",
+        "reference_entry",
+        "reference_heading",
+        "heading",
+        "caption",
+        "table_cell",
+        "list_item",
+    }:
+        return False
+
+    if agent == "estrutura" and block_type in {
+        "direct_quote",
+        "reference_entry",
+        "table_cell",
+    }:
+        return False
+    if agent == "estrutura" and comment.auto_apply:
+        if not _is_safe_structure_auto_apply(comment, chunks):
+            return False
+
+    if agent == "tabelas_figuras":
+        issue_excerpt = _normalized_text(comment.issue_excerpt)
+        if re.match(r"^(tabela|figura|quadro)\s+\d+", issue_excerpt):
+            if "fonte" in _normalized_text(comment.message) or "fonte" in _normalized_text(comment.suggested_fix):
+                return False
+        if comment.auto_apply and not _is_safe_text_normalization_auto_apply(comment, chunks):
+            return False
+
+    if agent == "tipografia":
+        if not comment.auto_apply:
+            return False
+        spec = _parse_format_spec(comment.format_spec)
+        if not spec:
+            return False
+        if any(key not in _ALLOWED_TYPOGRAPHY_KEYS for key in spec):
+            return False
+        if any(token in _normalized_text(comment.suggested_fix) for token in {"reescrever", "substituir texto", "alterar conteúdo"}):
+            return False
+
+    if agent == "referencias" and block_type not in {"reference_entry", "reference_heading"}:
+        return False
+    if agent == "referencias" and comment.auto_apply:
+        if not _is_safe_text_normalization_auto_apply(comment, chunks):
+            return False
+
+    if isinstance(comment.paragraph_index, int) and 0 <= comment.paragraph_index < len(chunks):
+        if comment.issue_excerpt:
+            excerpt_ok = _find_excerpt_index(comment.issue_excerpt, [comment.paragraph_index], chunks)
+            if excerpt_ok is None and agent in {"gramatica_ortografia", "referencias"}:
+                return False
+
+    return True
+
+
+def _tokenize_structure_text(value: str) -> list[str]:
+    return re.findall(r"[A-Za-zÀ-ÿ0-9]+", (value or "").casefold())
+
+
+def _is_safe_structure_auto_apply(comment: AgentComment, chunks: list[str]) -> bool:
+    if not isinstance(comment.paragraph_index, int) or not (0 <= comment.paragraph_index < len(chunks)):
+        return False
+    issue = (comment.issue_excerpt or "").strip()
+    suggestion = (comment.suggested_fix or "").strip()
+    source = (chunks[comment.paragraph_index] or "").strip()
+    if not issue or not suggestion or not source:
+        return False
+    if _normalized_text(issue) != _normalized_text(source):
+        return False
+    return _tokenize_structure_text(issue) == _tokenize_structure_text(suggestion) == _tokenize_structure_text(source)
+
+
+def _is_safe_text_normalization_auto_apply(comment: AgentComment, chunks: list[str]) -> bool:
+    if not isinstance(comment.paragraph_index, int) or not (0 <= comment.paragraph_index < len(chunks)):
+        return False
+    issue = (comment.issue_excerpt or "").strip()
+    suggestion = (comment.suggested_fix or "").strip()
+    source = (chunks[comment.paragraph_index] or "").strip()
+    if not issue or not suggestion or not source:
+        return False
+    if _normalized_text(issue) != _normalized_text(source):
+        return False
+    return _tokenize_structure_text(issue) == _tokenize_structure_text(suggestion) == _tokenize_structure_text(source)
+
+
+def _normalize_batch_comments(
+    comments: list[AgentComment],
+    agent: str,
+    batch_indexes: list[int],
+    chunks: list[str],
+    refs: list[str],
+) -> list[AgentComment]:
+    normalized: list[AgentComment] = []
+    for comment in comments:
+        remapped = _remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks)
+        if _should_keep_comment(remapped, agent=agent, chunks=chunks, refs=refs):
+            normalized.append(remapped)
+    return normalized
 
 
 def _agent_node(agent: str):
@@ -344,6 +541,7 @@ def run_conversation(
 
         for batch_idx, batch_indexes in enumerate(batches, start=1):
             excerpt = build_excerpt(indexes=batch_indexes, chunks=paragraphs, refs=refs, max_chars=1_000_000)
+            comments_before_batch = len(final_comments)
             initial_state: ChatState = {
                 "question": question,
                 "document_excerpt": excerpt,
@@ -363,7 +561,18 @@ def run_conversation(
 
                 current_comments = payload.get("comments", final_comments)
                 if isinstance(current_comments, list):
-                    final_comments = current_comments
+                    old_comments = current_comments[:comments_before_batch]
+                    batch_comments = current_comments[comments_before_batch:]
+                    final_comments = [
+                        *old_comments,
+                        *_normalize_batch_comments(
+                            batch_comments,
+                            agent=agent,
+                            batch_indexes=batch_indexes,
+                            chunks=paragraphs,
+                            refs=refs,
+                        ),
+                    ]
                 batch_status = str(payload.get("batch_status", "") or "")
                 total = len(final_comments)
                 new_count = max(total - previous_count, 0)
