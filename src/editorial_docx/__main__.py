@@ -40,6 +40,8 @@ def main() -> int:
         question=args.question,
         selected_agents=AGENT_ORDER.copy(),
     )
+    visible_comments = [c for c in result.comments if not c.auto_apply]
+    auto_apply_count = len(result.comments) - len(visible_comments)
 
     base = args.input.with_suffix("")
     output_json = args.output_json or base.parent / f"{base.name}_output.relatorio.json"
@@ -53,10 +55,8 @@ def main() -> int:
                     "paragraph_index": c.paragraph_index,
                     "issue_excerpt": c.issue_excerpt,
                     "suggested_fix": c.suggested_fix,
-                    "auto_apply": c.auto_apply,
-                    "format_spec": c.format_spec,
                 }
-                for c in result.comments
+                for c in visible_comments
             ],
             ensure_ascii=False,
             indent=2,
@@ -70,7 +70,8 @@ def main() -> int:
         print(f"DOCX comentado: {output_docx}")
 
     print(f"Relatório JSON: {output_json}")
-    print(f"Comentários gerados: {len(result.comments)}")
+    print(f"Comentários visíveis: {len(visible_comments)}")
+    print(f"Ajustes automáticos aplicados silenciosamente: {auto_apply_count}")
     return 0
 
 
