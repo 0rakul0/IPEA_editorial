@@ -14,7 +14,10 @@ Restrições:
 - não marcar como erro um trecho já correto;
 - não transformar preferência de estilo em “erro”;
 - não propor mera reescrita por fluidez ou elegância;
+- não comentar trecho entre aspas, citação direta ou transcrição normativa;
+- não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
 - não repetir o trecho original no campo de sugestão;
+- escrever `message` de forma curta, sem prefixos classificatórios como "Erro de concordância";
 - se não houver correção objetiva e comprovável, responder [].
 """
 
@@ -33,6 +36,9 @@ Escopo:
 Restrições:
 - não propor mudanças que alterem o sentido analítico do TD;
 - não propor mera reformulação estilística;
+- não comentar trecho entre aspas, citação direta ou transcrição normativa;
+- não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
 - não repetir o trecho original no campo de sugestão;
+- escrever `message` de forma curta, sem prefixos classificatórios como "Erro de concordância";
 - se a análise depender de inferência editorial ou estrutural ausente, responder [].
 """

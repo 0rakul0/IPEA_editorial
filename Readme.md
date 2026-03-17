@@ -220,12 +220,9 @@ A ordem atual está em [prompt.py](/D:/github/lang_IPEA_editorial/src/editorial_
 
 ```python
 AGENT_ORDER = [
-    "metadados",
-    "sinopse_abstract",
     "gramatica_ortografia",
     "tabelas_figuras",
     "referencias",
-    "estrutura",
     "tipografia",
 ]
 ```
@@ -404,8 +401,8 @@ pytest -q
 
 ## Estado Atual
 
+- `metadados`, `sinopse_abstract` e `estrutura` estão preservados no código, mas fora do fluxo padrão;
 - `tipografia` é silencioso quando autoaplica;
-- `estrutura` não roda em modo global;
 - `referencias` e `tabelas_figuras` têm filtros fortes de escopo;
-- `gramatica_ortografia` está mais amplo, mas filtrado por erro objetivo;
+- `gramatica_ortografia` evita comentários em citação direta e reduz falso positivo em pontuação;
 - o sistema suporta `openai`, `ollama` e `openai_compatible` pela mesma fábrica em [llm.py](/D:/github/lang_IPEA_editorial/src/editorial_docx/llm.py).

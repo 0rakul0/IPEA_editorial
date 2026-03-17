@@ -28,12 +28,9 @@ PROMPT_FILES = {
 }
 
 AGENT_ORDER = [
-    "metadados",
-    "sinopse_abstract",
     "gramatica_ortografia",
     "tabelas_figuras",
     "referencias",
-    "estrutura",
     "tipografia",
 ]
 

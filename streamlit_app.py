@@ -68,7 +68,7 @@ with st.sidebar:
     st.markdown("### Execução")
     if st.button("Rodar todos os agentes", key="sidebar_run_all", use_container_width=True):
         st.session_state.pending_run = {
-            "question": "Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
+            "question": "Faça uma revisão completa com todos os agentes ativos e liste ajustes prioritários.",
             "agents": AGENT_ORDER.copy(),
             "source": "control:all",
         }

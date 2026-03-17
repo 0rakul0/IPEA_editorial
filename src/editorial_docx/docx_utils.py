@@ -824,7 +824,7 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
         paragraph_text = _paragraph_text(paragraphs[paragraph_index])
         comment_groups = _group_comments_for_paragraph(paragraph_text, grouped_comments[paragraph_index])
         for items in comment_groups:
-            comment_lines = ["Achados consolidados neste trecho:"]
+            comment_lines: list[str] = []
             for ordinal, item in enumerate(items, start=1):
                 comment_lines.extend(_build_comment_lines_for_item(item, ordinal))
             agents = ", ".join(sorted({item.agent for item in items}))

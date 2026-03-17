@@ -112,7 +112,7 @@ def test_normalize_batch_comments_maps_local_index_to_global_index():
     assert normalized[0].paragraph_index == 5
 
 
-def test_normalize_batch_comments_accepts_objective_grammar_comment_on_direct_quote():
+def test_normalize_batch_comments_discards_grammar_comment_on_direct_quote():
     comments = [
         AgentComment(
             agent="gramatica_ortografia",
@@ -134,8 +134,7 @@ def test_normalize_batch_comments_accepts_objective_grammar_comment_on_direct_qu
         refs=refs,
     )
 
-    assert len(normalized) == 1
-    assert normalized[0].paragraph_index == 0
+    assert normalized == []
 
 
 def test_normalize_batch_comments_accepts_objective_grammar_comment_on_reference_entry():
@@ -188,6 +187,58 @@ def test_normalize_batch_comments_accepts_objective_grammar_comment_on_caption()
 
     assert len(normalized) == 1
     assert normalized[0].paragraph_index == 0
+
+
+def test_normalize_batch_comments_discards_grammar_comment_inside_quoted_excerpt():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Ortografia",
+            message="Corrigir o trecho citado.",
+            paragraph_index=0,
+            issue_excerpt="“de natureza indivisível”",
+            suggested_fix="“de natureza indivisivel”",
+        )
+    ]
+    chunks = [
+        "A lei define os direitos difusos como aqueles “de natureza indivisível, de que são titulares pessoas indeterminadas”."
+    ]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_grammar_comment_that_only_removes_terminal_period():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Pontuação",
+            message="Remover pontuação final.",
+            paragraph_index=0,
+            issue_excerpt="territórios centrais com presença ostensiva do tráfico.",
+            suggested_fix="territórios centrais com presença ostensiva do tráfico",
+        )
+    ]
+    chunks = ["territórios centrais com presença ostensiva do tráfico."]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
 
 
 def test_normalize_batch_comments_discards_identical_fix():
@@ -1005,7 +1056,7 @@ def test_apply_comments_to_docx_consolidates_multiple_comments_on_same_paragraph
     text = "".join(node.text or "" for node in comments[0].findall(".//w:t", ns))
 
     assert len(comments) == 1
-    assert "Achados consolidados neste trecho:" in text
+    assert "Achados consolidados neste trecho:" not in text
     assert "1. [estrutura/Estrutura]" in text
     assert "2. [gramatica_ortografia/Pontuação]" in text
     assert "Trecho:" not in text
@@ -1013,6 +1064,9 @@ def test_apply_comments_to_docx_consolidates_multiple_comments_on_same_paragraph
 
 def test_agent_order_excludes_conformidade_estilos():
     assert "conformidade_estilos" not in AGENT_ORDER
+    assert "metadados" not in AGENT_ORDER
+    assert "sinopse_abstract" not in AGENT_ORDER
+    assert "estrutura" not in AGENT_ORDER
 
 
 def test_normalize_batch_comments_discards_structure_section_claim_for_illustration_caption():
@@ -1146,6 +1200,60 @@ def test_normalize_batch_comments_discards_references_title_case_claim_on_all_ca
         )
     ]
     chunks = ["MATTOS, Bruna et al. EDUCAÇÃO EM SAÚDE: COMO ANDA ESSA PRÁTICA?"]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_references_emphasis_guess():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="Inconsistência de título",
+            message="O título do artigo deve estar em itálico.",
+            paragraph_index=0,
+            issue_excerpt="SHEI, AMIE. Brazil’s conditional cash transfer program associated with declines in infant mortality rates. Health Affairs, v. 32, n. 7, p. 1274-1281, 2013.",
+            suggested_fix="SHEI, AMIE. *Brazil’s conditional cash transfer program associated with declines in infant mortality rates*. Health Affairs, v. 32, n. 7, p. 1274-1281, 2013.",
+        )
+    ]
+    chunks = [
+        "SHEI, AMIE. Brazil’s conditional cash transfer program associated with declines in infant mortality rates. Health Affairs, v. 32, n. 7, p. 1274-1281, 2013."
+    ]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_references_year_change_guess():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="Inconsistência de ano",
+            message="O ano deve ser corrigido.",
+            paragraph_index=0,
+            issue_excerpt="DELGADO, G.; CARDOSO JR., J. C.. Principais resultados da pesquisa domiciliar sobre a previdência rural na região sul do Brasil. Rio de Janeiro: Ipea, 2023.",
+            suggested_fix="DELGADO, G.; CARDOSO JR., J. C.. Principais resultados da pesquisa domiciliar sobre a previdência rural na região sul do Brasil. Rio de Janeiro: Ipea, 2000.",
+        )
+    ]
+    chunks = [
+        "DELGADO, G.; CARDOSO JR., J. C.. Principais resultados da pesquisa domiciliar sobre a previdência rural na região sul do Brasil. Rio de Janeiro: Ipea, 2023."
+    ]
     refs = ["parágrafo 1 | tipo=reference_entry"]
 
     normalized = _normalize_batch_comments(
@@ -1391,3 +1499,4 @@ def test_apply_comments_to_docx_applies_auto_fix_silently_without_comment(tmp_pa
 
     assert "Times New Roman" in document_xml
     assert "<w:comment " not in comments_xml
+

@@ -15,7 +15,7 @@ def main() -> int:
     parser.add_argument("input", type=Path, help="Caminho do arquivo de entrada (.docx ou .pdf)")
     parser.add_argument(
         "--question",
-        default="Faça uma revisão completa com todos os agentes e liste ajustes prioritários.",
+        default="Faça uma revisão completa com todos os agentes ativos e liste ajustes prioritários.",
         help="Pergunta/instrução para os agentes.",
     )
     parser.add_argument(

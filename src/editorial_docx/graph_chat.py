@@ -42,6 +42,7 @@ _ILLUSTRATION_LABEL_RE = re.compile(
     r"^\s*(?:tabela|figura|quadro|imagem)\s+\d+\b|^\s*gr\S*fico\s+\d+\b",
     re.IGNORECASE,
 )
+_QUOTED_EXCERPT_RE = re.compile(r'^\s*["“”\'‘’«»].+["“”\'‘’«»]\s*$')
 _STYLE_BY_BLOCK_TYPE = {
     "heading": {"TITULO_1", "TITULO_2", "TITULO_3", "TÍTULO_1", "TÍTULO_2", "TÍTULO_3"},
     "paragraph": {"TEXTO"},
@@ -204,6 +205,23 @@ def _looks_like_all_caps_title(text: str) -> bool:
         return False
     upper_ratio = sum(1 for ch in letters if ch.isupper()) / len(letters)
     return upper_ratio >= 0.8
+
+
+def _looks_like_quoted_excerpt(text: str) -> bool:
+    stripped = (text or "").strip()
+    return bool(stripped and _QUOTED_EXCERPT_RE.match(stripped))
+
+
+def _removes_terminal_period_only(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue = (issue_excerpt or "").strip()
+    suggestion = (suggested_fix or "").strip()
+    if not issue or not suggestion or not issue.endswith("."):
+        return False
+    return suggestion == issue[:-1].rstrip()
+
+
+def _years_in_text(text: str) -> list[str]:
+    return re.findall(r"\b(?:19|20)\d{2}\b", text or "")
 
 
 def _find_metadata_like_indexes(chunks: list[str], refs: list[str], limit: int = 18) -> list[int]:
@@ -406,18 +424,28 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
     if agent == "referencias" and isinstance(comment.paragraph_index, int):
         current = (chunks[comment.paragraph_index] or "").casefold()
+        current_text = chunks[comment.paragraph_index] or ""
         message_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
         if any(token in message_blob for token in {"adicionar o titulo", "adicionar a pagina", "adicionar a paginacao", "adicionar o ano", "ano de publicacao", "verificar e corrigir o ano"}):
             return False
         if "caixa baixa" in message_blob or "caixa alta" in message_blob:
             return False
-        source_text = chunks[comment.paragraph_index] or ""
+        if any(token in message_blob for token in {"italico", "itálico", "negrito", "destaque grafico", "destaque gráfico"}):
+            return False
+        if any(token in message_blob for token in {"verificar", "confirmar", "informacoes suficientes", "informações suficientes"}) and _years_in_text(current_text):
+            return False
+        if _normalized_text(comment.suggested_fix) == _normalized_text(current_text):
+            return False
+        source_text = current_text
         if "titulo" in message_blob and _looks_like_all_caps_title(source_text):
             return False
         if "ano" in _normalized_text(comment.category) or "ano" in _normalized_text(comment.message):
-            if re.search(r"\b(19|20)\d{2}\b", current):
-                if "alterar o ano" in _normalized_text(comment.suggested_fix):
-                    return False
+            current_years = _years_in_text(current_text)
+            suggestion_years = _years_in_text(comment.suggested_fix)
+            if current_years and suggestion_years and suggestion_years != current_years:
+                return False
+            if re.search(r"\b(19|20)\d{2}\b", current) and "alterar o ano" in _normalized_text(comment.suggested_fix):
+                return False
 
     if agent == "conformidade_estilos":
         suggestion = (comment.suggested_fix or "").strip().upper()
@@ -435,8 +463,17 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             if excerpt_ok is None and agent in {"gramatica_ortografia", "referencias"}:
                 return False
         if agent == "gramatica_ortografia":
-            msg = _normalized_text(comment.message)
-            if not any(term in msg for term in {"ortografia", "acentua", "pontua", "concord", "crase", "regência", "regencia"}):
+            source_text = chunks[comment.paragraph_index] or ""
+            grammar_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
+            if block_type == "direct_quote":
+                return False
+            if _looks_like_quoted_excerpt(comment.issue_excerpt):
+                return False
+            if any(token in grammar_blob for token in {"clareza", "simplificada", "simplificar", "reestruturar", "reescr"}):
+                return False
+            if _normalized_text(comment.suggested_fix) == _normalized_text(source_text):
+                return False
+            if _removes_terminal_period_only(comment.issue_excerpt or source_text, comment.suggested_fix):
                 return False
 
     return True
