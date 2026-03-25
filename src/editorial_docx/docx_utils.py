@@ -31,6 +31,7 @@ class ExtractedParagraph:
     has_numbering: bool = False
     is_bold: bool = False
     is_italic: bool = False
+    alignment: str = ""
 
 
 @dataclass(slots=True)
@@ -112,6 +113,23 @@ def _paragraph_text(paragraph: etree._Element) -> str:
     for t in paragraph.findall(".//w:t", namespaces=NS):
         text_parts.append(t.text or "")
     return "".join(text_parts)
+
+
+def _paragraph_alignment(paragraph: etree._Element) -> str:
+    ppr = paragraph.find("w:pPr", namespaces=NS)
+    if ppr is None:
+        return ""
+    jc = ppr.find("w:jc", namespaces=NS)
+    if jc is None:
+        return ""
+    value = (jc.get(_qname(W_NS, "val")) or "").strip().lower()
+    mapping = {
+        "both": "justify",
+        "left": "left",
+        "center": "center",
+        "right": "right",
+    }
+    return mapping.get(value, value)
 
 
 def _normalize_text_with_mapping(text: str) -> tuple[str, list[int]]:
@@ -562,6 +580,8 @@ def _refine_contextual_block_types(items: list[ExtractedParagraph]) -> list[Extr
             ref_bits.append("negrito=sim")
         if item.is_italic:
             ref_bits.append("italico=sim")
+        if item.alignment:
+            ref_bits.append(f"align={item.alignment}")
         refined.append(
             ExtractedParagraph(
                 text=item.text,
@@ -571,6 +591,7 @@ def _refine_contextual_block_types(items: list[ExtractedParagraph]) -> list[Extr
                 has_numbering=item.has_numbering,
                 is_bold=item.is_bold,
                 is_italic=item.is_italic,
+                alignment=item.alignment,
             )
         )
     return refined
@@ -593,6 +614,7 @@ def extract_paragraphs_with_metadata(input_path: Path) -> list[ExtractedParagrap
     for visible_index, (paragraph, text) in enumerate(visible_paragraphs, start=1):
         style_name = _paragraph_style_name(paragraph, style_map)
         is_bold, is_italic = _paragraph_emphasis(paragraph, style_meta)
+        alignment = _paragraph_alignment(paragraph)
         previous_text = visible_paragraphs[visible_index - 2][1] if visible_index - 2 >= 0 else ""
         next_text = visible_paragraphs[visible_index][1] if visible_index < total_visible else ""
         block_type = _classify_paragraph(
@@ -613,6 +635,7 @@ def extract_paragraphs_with_metadata(input_path: Path) -> list[ExtractedParagrap
                 has_numbering=_paragraph_has_numbering(paragraph),
                 is_bold=is_bold,
                 is_italic=is_italic,
+                alignment=alignment,
             )
         )
     return _refine_contextual_block_types(items)

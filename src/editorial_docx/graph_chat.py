@@ -247,6 +247,11 @@ def _ref_has_flag(ref: str, flag: str) -> bool:
     return f"{flag}=sim" in _normalized_text(ref or "")
 
 
+def _ref_align(ref: str) -> str:
+    match = re.search(r"\balign=([a-z]+)\b", _normalized_text(ref or ""))
+    return match.group(1) if match else ""
+
+
 def _is_implicit_heading_candidate(index: int, chunks: list[str], refs: list[str]) -> bool:
     if not (0 <= index < len(chunks)):
         return False
@@ -481,6 +486,31 @@ def _heuristic_grammar_comments(batch_indexes: list[int], chunks: list[str], ref
     return comments
 
 
+def _heuristic_synopsis_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    comments: list[AgentComment] = []
+    for idx in batch_indexes:
+        if not (0 <= idx < len(chunks)) or idx >= len(refs):
+            continue
+        if _ref_block_type(refs[idx]) != "abstract_body":
+            continue
+        if _ref_align(refs[idx]) == "justify":
+            continue
+        text = (chunks[idx] or "").strip()
+        if not text:
+            continue
+        comments.append(
+            AgentComment(
+                agent="sinopse_abstract",
+                category="Formatação",
+                message="O abstract deve estar justificado, mas este parágrafo está com outro alinhamento.",
+                paragraph_index=idx,
+                issue_excerpt=text,
+                suggested_fix="Justificar o parágrafo do abstract.",
+            )
+        )
+    return comments
+
+
 def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
     comments: list[AgentComment] = []
     for idx in batch_indexes:
@@ -588,6 +618,110 @@ def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], r
     return comments
 
 
+def _reference_body_citation_keys(chunks: list[str], refs: list[str]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+
+    def add_key(author_raw: str, year_raw: str) -> None:
+        author = _ascii_fold((author_raw or "").strip()).casefold()
+        year = (year_raw or "").strip().casefold()
+        if not author or not year:
+            return
+        author = re.split(r"\s+(?:et\s+al\.?|e|and|&)\b", author, maxsplit=1)[0].strip()
+        tokens = re.findall(r"[a-z0-9]+", author)
+        if not tokens:
+            return
+        keys.add((tokens[0], year))
+
+    for chunk, ref in zip(chunks, refs):
+        if _ref_block_type(ref) in {"reference_entry", "reference_heading", "caption", "table_cell"}:
+            continue
+        text = chunk or ""
+
+        for author, year in re.findall(r"([A-ZÀ-Ý][A-Za-zÀ-ÿ'’`\-]+(?:\s+et\s+al\.?)?)\s*\((\d{4}[a-z]?)\)", text):
+            add_key(author, year)
+
+        for parenthetical in re.findall(r"\(([^)]*\d{4}[a-z]?[^)]*)\)", text):
+            for segment in re.split(r";", parenthetical):
+                match = re.search(r"([A-ZÀ-Ý][A-Za-zÀ-ÿ'’`\-]+)(?:[^0-9()]*)[, ]\s*(\d{4}[a-z]?)", segment.strip())
+                if match:
+                    add_key(match.group(1), match.group(2))
+
+    return keys
+
+
+def _reference_entry_key(text: str) -> tuple[str, str] | None:
+    source = (text or "").strip()
+    if not source:
+        return None
+    year_matches = re.findall(r"\b(?:19|20)\d{2}[a-z]?\b", source, flags=re.IGNORECASE)
+    if not year_matches:
+        return None
+    year = year_matches[-1].casefold()
+
+    if "," in source:
+        author_part = source.split(",", 1)[0]
+    elif "." in source:
+        author_part = source.split(".", 1)[0]
+    else:
+        author_part = source
+
+    author_part = _ascii_fold(author_part).casefold().strip()
+    tokens = re.findall(r"[a-z0-9]+", author_part)
+    if not tokens:
+        return None
+    return tokens[0], year
+
+
+def _heuristic_reference_global_comments(chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    citation_keys = _reference_body_citation_keys(chunks, refs)
+    if not citation_keys:
+        return []
+
+    comments: list[AgentComment] = []
+    matched_reference_keys: set[tuple[str, str]] = set()
+    reference_heading_idx = next((idx for idx, ref in enumerate(refs) if _ref_block_type(ref) == "reference_heading"), None)
+    if reference_heading_idx is None:
+        return []
+
+    for idx, (chunk, ref) in enumerate(zip(chunks, refs)):
+        if idx <= reference_heading_idx:
+            continue
+        if _ref_block_type(ref) != "reference_entry":
+            continue
+        entry_key = _reference_entry_key(chunk)
+        if entry_key is None:
+            continue
+        if entry_key in citation_keys:
+            matched_reference_keys.add(entry_key)
+            continue
+        comments.append(
+            AgentComment(
+                agent="referencias",
+                category="inconsistency",
+                message="Esta referência não foi localizada nas citações do corpo do texto.",
+                paragraph_index=idx,
+                issue_excerpt=chunk,
+                suggested_fix="Verificar se a obra precisa ser citada no texto ou removida da lista de referências.",
+            )
+        )
+
+    missing_reference_keys = citation_keys - matched_reference_keys
+    if reference_heading_idx is not None:
+        for author, year in sorted(missing_reference_keys):
+            comments.append(
+                AgentComment(
+                    agent="referencias",
+                    category="inconsistency",
+                    paragraph_index=reference_heading_idx,
+                    message=f"Há uma citação no corpo do texto sem correspondência clara na lista de referências: {author}, {year}.",
+                    issue_excerpt=chunks[reference_heading_idx],
+                    suggested_fix="Incluir a referência correspondente na lista ou revisar a chamada no texto.",
+                )
+            )
+
+    return comments
+
+
 def _heuristic_table_figure_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
     comments: list[AgentComment] = []
     source_prefixes = ("fonte:", "elaboração:", "elaboracao:")
@@ -611,10 +745,10 @@ def _heuristic_table_figure_comments(batch_indexes: list[int], chunks: list[str]
                 AgentComment(
                     agent="tabelas_figuras",
                     category="Legenda",
-                    message="O identificador e o subtítulo estão fundidos na mesma linha da legenda.",
+                    message="Na legenda, o identificador deve ficar na primeira linha e o título descritivo na linha abaixo.",
                     paragraph_index=idx,
                     issue_excerpt=text,
-                    suggested_fix=f"{label} {number}\n{title}",
+                    suggested_fix=f"Separar em duas linhas: `{label} {number}` na primeira linha e `{title}` na linha abaixo.",
                 )
             )
 
@@ -1160,10 +1294,13 @@ def _normalize_batch_comments(
             normalized.append(remapped)
     if agent == "gramatica_ortografia":
         normalized.extend(_heuristic_grammar_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "sinopse_abstract":
+        normalized.extend(_heuristic_synopsis_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "tabelas_figuras":
         normalized.extend(_heuristic_table_figure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "referencias":
         normalized.extend(_heuristic_reference_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+        normalized.extend(_heuristic_reference_global_comments(chunks=chunks, refs=refs))
     if agent == "estrutura":
         normalized.extend(_heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "tipografia":

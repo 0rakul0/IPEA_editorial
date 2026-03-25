@@ -17,7 +17,6 @@ Esse documento deve ser tratado como a referência principal do sistema.
 - o JSON exporta todos os comentários visíveis;
 - os agentes ativos na execução padrão são:
   - `sinopse_abstract`
-  - `estrutura`
   - `gramatica_ortografia`
   - `tabelas_figuras`
   - `referencias`

@@ -52,6 +52,6 @@ Restrições:
 Mensagens:
 - explicar de forma local o que está errado no bloco;
 - em `suggested_fix`, mostrar a correção em formato editorial, por exemplo:
-  - `TABELA 2\nTítulo descritivo`
+  - `Separar em duas linhas: TABELA 2 na primeira linha e Título descritivo na linha abaixo.`
   - `Adicionar uma linha própria com Fonte: abaixo do bloco.`
 """

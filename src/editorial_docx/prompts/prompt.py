@@ -29,7 +29,6 @@ PROMPT_FILES = {
 
 AGENT_ORDER = [
     "sinopse_abstract",
-    "estrutura",
     "gramatica_ortografia",
     "tabelas_figuras",
     "referencias",

@@ -295,7 +295,7 @@ def test_normalize_batch_comments_discards_grammar_comment_that_only_removes_ter
 
 def test_agent_order_excludes_metadata_and_structure_from_default_run():
     assert "metadados" not in AGENT_ORDER
-    assert "estrutura" in AGENT_ORDER
+    assert "estrutura" not in AGENT_ORDER
 
 
 def test_agent_short_labels_are_compact_and_self_explanatory():
@@ -456,7 +456,7 @@ def test_normalize_batch_comments_discards_table_comment_when_caption_already_ha
     )
 
     assert all(item.message != "Falta identificador para a tabela." for item in normalized)
-    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
+    assert any(item.message == "Na legenda, o identificador deve ficar na primeira linha e o título descritivo na linha abaixo." for item in normalized)
 
 
 def test_normalize_batch_comments_discards_table_comment_with_empty_issue_excerpt():
@@ -496,7 +496,7 @@ def test_normalize_batch_comments_discards_synopsis_comment_about_uppercase_on_f
         )
     ]
     chunks = ["Os resultados sugerem possibilidades promissoras de desenvolvimento de indicadores."]
-    refs = ["parágrafo 1 | tipo=abstract_body"]
+    refs = ["parágrafo 1 | tipo=abstract_body | align=justify"]
 
     normalized = _normalize_batch_comments(
         comments,
@@ -937,7 +937,7 @@ def test_normalize_batch_comments_discards_table_source_suggestion_inside_captio
     )
 
     assert all(item.message != "Adicionar a fonte dos dados utilizados na Tabela 2, conforme o padrão editorial." for item in normalized)
-    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
+    assert any(item.message == "Na legenda, o identificador deve ficar na primeira linha e o título descritivo na linha abaixo." for item in normalized)
 
 
 def test_normalize_batch_comments_accepts_safe_typography_auto_apply():
@@ -1203,7 +1203,7 @@ def test_normalize_batch_comments_discards_table_source_claim_when_neighbor_sour
 
     assert all(item.message != "Identificador do gráfico está correto, mas a fonte não está presente." for item in normalized)
     assert all(item.message != "O bloco está sem uma linha de fonte ou elaboração logo abaixo da legenda." for item in normalized)
-    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
+    assert any(item.message == "Na legenda, o identificador deve ficar na primeira linha e o título descritivo na linha abaixo." for item in normalized)
 
 
 def test_normalize_batch_comments_discards_table_level_claim_from_table_cell():
@@ -1265,8 +1265,8 @@ def test_normalize_batch_comments_adds_table_caption_split_heuristic():
         refs=["parágrafo 1 | tipo=caption"],
     )
 
-    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
-    assert any(item.suggested_fix == "TABELA 2\nDecomposição do índice de Gini da renda total familiar per capita" for item in normalized)
+    assert any(item.message == "Na legenda, o identificador deve ficar na primeira linha e o título descritivo na linha abaixo." for item in normalized)
+    assert any(item.suggested_fix == "Separar em duas linhas: `TABELA 2` na primeira linha e `Decomposição do índice de Gini da renda total familiar per capita` na linha abaixo." for item in normalized)
 
 
 def test_normalize_batch_comments_adds_table_missing_source_heuristic_when_block_has_no_source_line():
@@ -1292,6 +1292,73 @@ def test_normalize_batch_comments_does_not_add_table_missing_source_heuristic_wh
     )
 
     assert all(item.message != "O bloco está sem uma linha de fonte ou elaboração logo abaixo da legenda." for item in normalized)
+
+
+def test_normalize_batch_comments_adds_synopsis_alignment_heuristic_for_non_justified_abstract():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=["This abstract discusses the collective benefits of social security."],
+        refs=["parágrafo 1 | tipo=abstract_body | align=left"],
+    )
+
+    assert any(item.message == "O abstract deve estar justificado, mas este parágrafo está com outro alinhamento." for item in normalized)
+    assert any(item.suggested_fix == "Justificar o parágrafo do abstract." for item in normalized)
+
+
+def test_normalize_batch_comments_skips_synopsis_alignment_heuristic_when_abstract_is_justified():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=["This abstract discusses the collective benefits of social security."],
+        refs=["parágrafo 1 | tipo=abstract_body | align=justify"],
+    )
+
+    assert all(item.message != "O abstract deve estar justificado, mas este parágrafo está com outro alinhamento." for item in normalized)
+
+
+def test_normalize_batch_comments_adds_reference_global_comment_for_uncited_entry():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[2, 3],
+        chunks=[
+            "Segundo Silva (2020), a política produziu efeitos coletivos relevantes.",
+            "Referências",
+            "SILVA, João. Política social no Brasil. Rio de Janeiro: Editora X, 2020.",
+            "SOUZA, Maria. Benefícios coletivos. São Paulo: Editora Y, 2021.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+            "parágrafo 4 | tipo=reference_entry",
+        ],
+    )
+
+    assert any(item.message == "Esta referência não foi localizada nas citações do corpo do texto." and item.paragraph_index == 3 for item in normalized)
+
+
+def test_normalize_batch_comments_adds_reference_global_comment_for_citation_missing_from_reference_list():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[2],
+        chunks=[
+            "Segundo Silva (2020), a política produziu efeitos coletivos relevantes.",
+            "Referências",
+            "SOUZA, Maria. Benefícios coletivos. São Paulo: Editora Y, 2021.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert any("Há uma citação no corpo do texto sem correspondência clara na lista de referências" in item.message and item.paragraph_index == 1 for item in normalized)
 
 
 def test_normalize_batch_comments_discards_wrong_style_for_caption():
@@ -1615,7 +1682,7 @@ def test_agent_order_excludes_conformidade_estilos():
     assert "conformidade_estilos" not in AGENT_ORDER
     assert "metadados" not in AGENT_ORDER
     assert "sinopse_abstract" in AGENT_ORDER
-    assert "estrutura" in AGENT_ORDER
+    assert "estrutura" not in AGENT_ORDER
 
 
 def test_normalize_batch_comments_discards_structure_section_claim_for_illustration_caption():

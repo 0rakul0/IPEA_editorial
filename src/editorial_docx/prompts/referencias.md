@@ -172,6 +172,7 @@ Revisar a seção de REFERÊNCIAS com foco em consistência editorial e conformi
 - o que está faltando
 - onde está o erro
 - qual fragmento deve ser ajustado
+- e se a referência está ou não amparada pelas citações do corpo do texto
 
 ---
 
@@ -232,6 +233,7 @@ Se o tipo documental estiver claro no próprio trecho, você pode apontar ausên
 - elementos obrigatórios ausentes quando a ausência for objetiva
 - duplicação indevida de local/editora
 - referência colada com a seguinte
+- coerência global entre citações no corpo e a lista de referências
 
 ---
 

@@ -83,7 +83,7 @@ Exemplos esperados:
 Arquivo central:
 - [referencias.md](D:\github\lang_IPEA_editorial\src\editorial_docx\prompts\referencias.md)
 
-### 5. O agente de estrutura volta a operar a partir de `Introdução`
+### 5. O agente de estrutura continua disponível, mas saiu da execução padrão
 
 Comportamento atual:
 - ignora pré-textuais como `SINOPSE`, `ABSTRACT`, `Keywords`, `JEL`;
@@ -91,6 +91,11 @@ Comportamento atual:
 - cobra consistência entre títulos de mesmo nível;
 - pode numerar `Introdução`, seções intermediárias, `Considerações finais` e `Referências` quando o documento mistura títulos numerados e não numerados;
 - não usa comentário narrativo com `parágrafo X`.
+
+Uso atual:
+- o agente continua implementado e testado;
+- ele não entra mais na execução padrão do projeto;
+- pode ser acionado de forma dirigida quando houver interesse específico em revisão estrutural.
 
 Arquivo central:
 - [estrutura.md](D:\github\lang_IPEA_editorial\src\editorial_docx\prompts\estrutura.md)
@@ -110,7 +115,7 @@ Arquivo central:
 Comportamento atual:
 - segue ativo no fluxo padrão;
 - comenta principalmente:
-  - identificador e subtítulo fundidos na mesma linha;
+  - necessidade de separar o identificador na primeira linha e o título descritivo na linha abaixo;
   - ausência de linha própria de `Fonte:` ou `Elaboração:` abaixo do bloco, quando isso é objetivamente visível;
 - continua bloqueando falso positivo em célula interna de tabela;
 - continua bloqueando falsa cobrança de identificador quando a legenda já começa com `Tabela`, `Figura`, `Quadro` ou `Gráfico`.
@@ -163,7 +168,6 @@ A ordem padrão atual é:
 ```python
 AGENT_ORDER = [
     "sinopse_abstract",
-    "estrutura",
     "gramatica_ortografia",
     "tabelas_figuras",
     "referencias",
@@ -225,6 +229,10 @@ Não deve:
 - usar menção de seção dentro do corpo como evidência;
 - tratar legenda de figura/tabela como seção;
 - comentar com referência a número de parágrafo.
+
+Status:
+- disponível no projeto;
+- fora da execução padrão.
 
 ### `gram`
 
@@ -400,4 +408,3 @@ Se for preciso ajustar o sistema depois desta versão:
 
 ### Para preservar comportamento estável
 - adicionar teste em [test_graph_chat.py](D:\github\lang_IPEA_editorial\testes\test_graph_chat.py) antes de alterar a lógica
-
