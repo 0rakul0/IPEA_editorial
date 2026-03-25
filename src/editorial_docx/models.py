@@ -3,6 +3,22 @@
 from dataclasses import dataclass
 
 
+AGENT_SHORT_LABELS = {
+    "metadados": "meta",
+    "sinopse_abstract": "sin",
+    "estrutura": "est",
+    "gramatica_ortografia": "gram",
+    "tabelas_figuras": "tab",
+    "referencias": "ref",
+    "tipografia": "tip",
+    "coordenador": "coord",
+}
+
+
+def agent_short_label(agent: str) -> str:
+    return AGENT_SHORT_LABELS.get((agent or "").strip(), (agent or "").strip())
+
+
 @dataclass(slots=True)
 class AgentComment:
     agent: str

@@ -8,6 +8,9 @@ Responsabilidade:
 Restrições:
 - não confundir legenda/título com a linha de fonte;
 - nunca sugerir inserir "Fonte:" dentro da legenda descritiva;
+- se a legenda já começar por `Tabela`, `Figura`, `Quadro` ou `Gráfico` seguido de numeração, não apontar ausência de identificador;
+- se a própria legenda já trouxer identificador e título na mesma linha, não exigir subtítulo separado sem evidência do bloco completo;
+- não produzir comentário quando `issue_excerpt` vier vazio;
 - quando faltar fonte, a correção deve ser em linha separada, abaixo da tabela/figura;
 - dados internos e células da tabela não são evidência suficiente para concluir ausência de identificador, subtítulo ou fonte;
 - se a correção for apenas normalização mecânica do identificador ou do título já existente, marcar `auto_apply=true`;
@@ -32,6 +35,9 @@ Restrições:
 - não confundir legenda/título com a linha de fonte;
 - não fundir identificador, subtítulo e fonte na mesma linha;
 - nunca sugerir inserir "Fonte:" dentro da legenda descritiva;
+- se a legenda já começar por `Tabela`, `Figura`, `Quadro` ou `Gráfico` seguido de numeração, não apontar ausência de identificador;
+- se a própria legenda já trouxer identificador e título na mesma linha, não exigir subtítulo separado sem evidência do bloco completo;
+- não produzir comentário quando `issue_excerpt` vier vazio;
 - dados internos e células da tabela não são evidência suficiente para concluir ausência de identificador, subtítulo ou fonte;
 - se a legenda já estiver correta, não sugerir acrescentar nela a fonte dos dados;
 - quando faltar fonte, a correção deve ser em linha separada, abaixo da tabela/figura;

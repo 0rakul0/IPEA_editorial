@@ -5,11 +5,14 @@ from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from editorial_docx.docx_utils import _build_review_note
+from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_paragraphs_with_metadata
 from editorial_docx.graph_chat import _agent_scope_indexes, _normalize_batch_comments, _parse_comments
-from editorial_docx.models import AgentComment
+from editorial_docx.models import AgentComment, agent_short_label
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
+
+
+SAMPLE_DOCX = Path(__file__).resolve().parent / "234362_TD_3125_Benefícios coletivos (53 laudas).docx"
 
 
 def test_parse_comments_accepts_json_fenced_block():
@@ -137,7 +140,7 @@ def test_normalize_batch_comments_discards_grammar_comment_on_direct_quote():
     assert normalized == []
 
 
-def test_normalize_batch_comments_accepts_objective_grammar_comment_on_reference_entry():
+def test_normalize_batch_comments_discards_grammar_comment_on_reference_entry():
     comments = [
         AgentComment(
             agent="gramatica_ortografia",
@@ -159,8 +162,7 @@ def test_normalize_batch_comments_accepts_objective_grammar_comment_on_reference
         refs=refs,
     )
 
-    assert len(normalized) == 1
-    assert normalized[0].paragraph_index == 0
+    assert normalized == []
 
 
 def test_normalize_batch_comments_accepts_objective_grammar_comment_on_caption():
@@ -216,6 +218,36 @@ def test_normalize_batch_comments_discards_grammar_comment_inside_quoted_excerpt
     assert normalized == []
 
 
+def test_normalize_batch_comments_discards_long_grammar_comment_in_paragraph_with_quote():
+    full_sentence = (
+        "A distinÃ§Ã£o estÃ¡ afirmada na Lei nÂº 8078, de 1990, que define, em seu artigo 81, "
+        "os direitos difusos como aqueles \u201cde natureza indivisÃ­vel, de que sÃ£o titulares "
+        "pessoas indeterminadas e ligadas por circunstÃ¢ncias de fato\u201d."
+    )
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Ortografia",
+            message="Corrigir o perÃ­odo.",
+            paragraph_index=0,
+            issue_excerpt=full_sentence,
+            suggested_fix=full_sentence.replace("os direitos difusos", "os direitos coletivos"),
+        )
+    ]
+    chunks = [full_sentence]
+    refs = ["parÃ¡grafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
 def test_normalize_batch_comments_discards_grammar_comment_that_only_removes_terminal_period():
     comments = [
         AgentComment(
@@ -239,6 +271,325 @@ def test_normalize_batch_comments_discards_grammar_comment_that_only_removes_ter
     )
 
     assert normalized == []
+
+
+def test_agent_order_excludes_metadata_and_structure_from_default_run():
+    assert "metadados" not in AGENT_ORDER
+    assert "estrutura" in AGENT_ORDER
+
+
+def test_agent_short_labels_are_compact_and_self_explanatory():
+    assert agent_short_label("sinopse_abstract") == "sin"
+    assert agent_short_label("gramatica_ortografia") == "gram"
+    assert agent_short_label("tabelas_figuras") == "tab"
+    assert agent_short_label("referencias") == "ref"
+
+
+def test_normalize_batch_comments_discards_grammar_comment_that_only_swaps_demonstrative():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Concordância",
+            message="Ajustar concordância.",
+            paragraph_index=0,
+            issue_excerpt="esse trabalho",
+            suggested_fix="este trabalho",
+        )
+    ]
+    chunks = ["esse trabalho tem o objetivo de amadurecer o debate."]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_grammar_comment_that_only_inserts_coordination_comma():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Pontuação",
+            message="Ajustar pontuação.",
+            paragraph_index=0,
+            issue_excerpt="abordagens coletivas e territoriais",
+            suggested_fix="abordagens coletivas, e territoriais",
+        )
+    ]
+    chunks = ["as diferentes estratégias e abordagens coletivas e territoriais"]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_adds_heuristic_for_plural_agreement():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["Os impactos recaem sobre os benefícios monetário do programa."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].issue_excerpt == "benefícios monetário"
+    assert normalized[0].suggested_fix == "benefícios monetários"
+
+
+def test_normalize_batch_comments_adds_heuristic_for_compound_subject_agreement():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["Ainda hoje é a trajetória profissional e a comprovação individual que assenta o acesso ao direito previdenciário."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].issue_excerpt == "que assenta o acesso"
+    assert normalized[0].suggested_fix == "que assentam o acesso"
+
+
+def test_normalize_batch_comments_discards_plural_copula_for_singular_head():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Concordância",
+            message="Ajustar a concordância.",
+            paragraph_index=0,
+            issue_excerpt="o conhecimento sobre os impactos coletivos das ofertas ainda é pouco sistematizado.",
+            suggested_fix="o conhecimento sobre os impactos coletivos das ofertas ainda são pouco sistematizados.",
+        )
+    ]
+    chunks = [comments[0].issue_excerpt]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_possessive_article_style_swap():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Concordância",
+            message="Ajustar a concordância.",
+            paragraph_index=0,
+            issue_excerpt="as suas ofertas e os seus resultados sociais,",
+            suggested_fix="as suas ofertas e seus resultados sociais,",
+        )
+    ]
+    chunks = [comments[0].issue_excerpt]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_table_comment_when_caption_already_has_identifier():
+    comments = [
+        AgentComment(
+            agent="tabelas_figuras",
+            category="Identificação",
+            message="Falta identificador para a tabela.",
+            paragraph_index=0,
+            issue_excerpt="Tabela 2: Decomposição do índice de Gini",
+            suggested_fix="Adicionar identificador 'Tabela 2' antes do título.",
+        )
+    ]
+    chunks = ["Tabela 2: Decomposição do índice de Gini"]
+    refs = ["parágrafo 1 | tipo=caption"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="tabelas_figuras",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_table_comment_with_empty_issue_excerpt():
+    comments = [
+        AgentComment(
+            agent="tabelas_figuras",
+            category="Título",
+            message="Falta título para a tabela.",
+            paragraph_index=0,
+            issue_excerpt="",
+            suggested_fix="Adicionar título descritivo da tabela.",
+        )
+    ]
+    chunks = ["Tabela 3"]
+    refs = ["parágrafo 1 | tipo=caption"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="tabelas_figuras",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_synopsis_comment_about_uppercase_on_fragment():
+    comments = [
+        AgentComment(
+            agent="sinopse_abstract",
+            category="Textual Issue",
+            message="A sinopse apresenta uma frase que não inicia com letra maiúscula.",
+            paragraph_index=0,
+            issue_excerpt="sugerem possibilidades promissoras de desenvolvimento",
+            suggested_fix="Iniciar a frase com letra maiúscula.",
+        )
+    ]
+    chunks = ["Os resultados sugerem possibilidades promissoras de desenvolvimento de indicadores."]
+    refs = ["parágrafo 1 | tipo=abstract_body"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_comment_that_rewrites_whole_entry():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="O título da referência não está em conformidade.",
+            paragraph_index=0,
+            issue_excerpt="Delgado, G., & Cardoso Jr, J. C.. (2000). Principais resultados da pesquisa domiciliar sobre a previdência rural na região sul do Brasil (Projeto Avaliação Socioeconômica da Previdência Social Rural). Rio de Janeiro: IPEA, 2023. (Texto para Discussão n. 734.",
+            suggested_fix="DELGADO, G.; CARDOSO JR, J. C.. Principais resultados da pesquisa domiciliar sobre a previdência rural na região sul do Brasil (Projeto Avaliação Socioeconômica da Previdência Social Rural). Rio de Janeiro: IPEA, 2023. (Texto para Discussão n. 734).",
+        )
+    ]
+    chunks = [comments[0].issue_excerpt]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert all("DELGADO, G.; CARDOSO JR" not in item.suggested_fix for item in normalized)
+    assert any(item.issue_excerpt.endswith("2023") and item.suggested_fix.endswith("2000") for item in normalized)
+
+
+def test_normalize_batch_comments_discards_reference_comment_that_only_asks_for_missing_information():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="Falta de informações sobre o periódico na referência.",
+            paragraph_index=0,
+            issue_excerpt="Rego, W. L. (2008). Aspectos teóricos das políticas de cidadania: uma aproximação ao Bolsa Família. Lua Nova: Revista de Cultura e Política, (73), 147-185.",
+            suggested_fix="Adicionar informações sobre o periódico, como volume e número, se disponíveis.",
+        )
+    ]
+    chunks = [comments[0].issue_excerpt]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_title_comment_when_issue_is_page_range():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="A formatação do título do livro está inconsistente.",
+            paragraph_index=0,
+            issue_excerpt="Democracia hoje: novos desafios para a teoria democrática contemporânea. Brasília: Ed. da UnB, 2021. pp.246-82.",
+            suggested_fix="Democracia hoje: novos desafios para a teoria democrática contemporânea. Brasília: Ed. da UnB, 2021. pp. 246-282.",
+        )
+    ]
+    chunks = [comments[0].issue_excerpt]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_adds_reference_heuristic_for_glued_entries():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=[
+            "DESLANDES, Suely. Humanização dos cuidados em saúde. Rio de Janeiro: Fiocruz, 2006.DURKHEIM, E. Da divisão do trabalho social. São Paulo: Martins Fontes, 1999."
+        ],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert any(item.issue_excerpt == "2006.D" and item.suggested_fix == "2006. D" for item in normalized)
+
+
+def test_normalize_batch_comments_adds_reference_heuristic_for_page_spacing():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=[
+            "SOUZA, Marcelo L. O território: sobre espaço, poder, autonomia e desenvolvimento. In: CASTRO, Iná E., et. al (orgs.), Geografia: conceitos e temas. 2. ed. Rio de Janeiro: Bertrand, 1999, p.77-116."
+        ],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert any(item.issue_excerpt.startswith("p.77") and item.suggested_fix.startswith("p. 77") for item in normalized)
 
 
 def test_normalize_batch_comments_discards_identical_fix():
@@ -347,6 +698,25 @@ def test_extract_paragraphs_with_metadata_keeps_long_body_text_as_paragraph(tmp_
     assert items[1].block_type == "paragraph"
 
 
+def test_extract_paragraphs_with_metadata_recognizes_scientific_front_matter_and_references():
+    items = extract_paragraphs_with_metadata(SAMPLE_DOCX)
+
+    assert items[1].block_type == "title"
+    assert items[2].block_type == "author_line"
+    assert items[7].block_type == "abstract_heading"
+    assert items[8].block_type == "abstract_body"
+    assert items[9].block_type == "keywords_label"
+    assert items[10].block_type == "keywords_content"
+    assert items[11].block_type == "jel_code"
+    assert items[12].block_type == "abstract_heading"
+    assert items[14].block_type == "keywords_label"
+    assert items[15].block_type == "keywords_content"
+    assert items[16].block_type == "jel_code"
+    assert items[338].block_type == "reference_entry"
+    assert items[349].block_type == "reference_entry"
+    assert items[389].block_type == "reference_entry"
+
+
 def test_reference_prompt_support_context_loads_local_norms():
     support_context = _build_agent_support_context("referencias")
 
@@ -407,6 +777,19 @@ def test_build_review_note_marks_typography_as_auto_applied():
     )
 
     assert _build_review_note(item) == "Ajuste tipográfico aplicado automaticamente."
+
+
+def test_build_comment_lines_for_item_omits_category_label():
+    item = AgentComment(
+        agent="gramatica_ortografia",
+        category="ConcordÃ¢ncia",
+        message="Ajustar concordÃ¢ncia verbal.",
+        suggested_fix="vÃªm sendo",
+    )
+
+    lines = _build_comment_lines_for_item(item, ordinal=1)
+
+    assert lines[0] == "1. [gram] Ajustar concordÃ¢ncia verbal."
 
 
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():
@@ -1057,16 +1440,16 @@ def test_apply_comments_to_docx_consolidates_multiple_comments_on_same_paragraph
 
     assert len(comments) == 1
     assert "Achados consolidados neste trecho:" not in text
-    assert "1. [estrutura/Estrutura]" in text
-    assert "2. [gramatica_ortografia/Pontuação]" in text
+    assert "1. [est]" in text
+    assert "2. [gram]" in text
     assert "Trecho:" not in text
 
 
 def test_agent_order_excludes_conformidade_estilos():
     assert "conformidade_estilos" not in AGENT_ORDER
     assert "metadados" not in AGENT_ORDER
-    assert "sinopse_abstract" not in AGENT_ORDER
-    assert "estrutura" not in AGENT_ORDER
+    assert "sinopse_abstract" in AGENT_ORDER
+    assert "estrutura" in AGENT_ORDER
 
 
 def test_normalize_batch_comments_discards_structure_section_claim_for_illustration_caption():
@@ -1280,6 +1663,119 @@ def test_agent_scope_indexes_limits_estrutura_to_headings():
     assert picked == [1]
 
 
+def test_agent_scope_indexes_starts_estrutura_from_intro_and_prefers_short_titles():
+    chunks = [
+        "SINOPSE",
+        "1 INTRODUÇÃO",
+        "Texto corrido da introdução.",
+        "2 Classificação dos benefícios coletivos",
+        "Texto.",
+        "3 Considerações finais",
+        "Texto final.",
+        "4 Título estrutural excessivamente longo para o filtro",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=heading | estilo=Heading 1",
+        "parágrafo 2 | tipo=heading | estilo=Heading 1",
+        "parágrafo 3 | tipo=paragraph",
+        "parágrafo 4 | tipo=heading | estilo=Heading 1",
+        "parágrafo 5 | tipo=paragraph",
+        "parágrafo 6 | tipo=heading | estilo=Heading 1",
+        "parágrafo 7 | tipo=paragraph",
+        "parágrafo 8 | tipo=heading | estilo=Heading 1",
+    ]
+
+    picked = _agent_scope_indexes("estrutura", chunks, refs, sections=[])
+
+    assert picked == [1, 3, 5, 7]
+
+
+def test_agent_scope_indexes_accepts_implicit_short_heading_without_formatting():
+    chunks = [
+        "SINOPSE",
+        "1 Introdução",
+        "Texto de abertura do trabalho com desenvolvimento suficiente para corpo do texto.",
+        "Resultados",
+        "Este parágrafo descreve os resultados do estudo com conteúdo corrido e mais de seis palavras.",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=heading",
+        "parágrafo 2 | tipo=heading",
+        "parágrafo 3 | tipo=paragraph",
+        "parágrafo 4 | tipo=paragraph",
+        "parágrafo 5 | tipo=paragraph",
+    ]
+
+    picked = _agent_scope_indexes("estrutura", chunks, refs, sections=[])
+
+    assert picked == [1, 3]
+
+
+def test_normalize_batch_comments_adds_structure_numbering_for_consideracoes_finais_when_intro_is_numbered():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="estrutura",
+        batch_indexes=[0, 1, 2, 3, 4, 5],
+        chunks=[
+            "Introdução",
+            "Classificação dos benefícios coletivos",
+            "Classificação pela oferta dos benefícios",
+            "Classificação por resultados das políticas públicas",
+            "Considerações finais",
+            "Referências",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=heading | estilo=heading 1 | numerado=sim",
+            "parágrafo 2 | tipo=heading | estilo=heading 1",
+            "parágrafo 3 | tipo=heading | estilo=heading 1",
+            "parágrafo 4 | tipo=heading | estilo=heading 1",
+            "parágrafo 5 | tipo=heading | estilo=heading 1",
+            "parágrafo 6 | tipo=reference_heading | estilo=heading 1",
+        ],
+    )
+
+    assert any(item.issue_excerpt == "Considerações finais" and item.suggested_fix == "5. Considerações finais" for item in normalized)
+    assert any(item.issue_excerpt == "Referências" and item.suggested_fix == "6. Referências" for item in normalized)
+
+
+def test_normalize_batch_comments_does_not_add_structure_numbering_when_intro_is_not_numbered():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="estrutura",
+        batch_indexes=[0, 1],
+        chunks=["Introdução", "Considerações finais"],
+        refs=[
+            "parágrafo 1 | tipo=heading | estilo=heading 1",
+            "parágrafo 2 | tipo=heading | estilo=heading 1",
+        ],
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_adds_structure_numbering_when_top_level_headings_are_mixed():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="estrutura",
+        batch_indexes=[0, 1, 2, 3],
+        chunks=[
+            "Introdução",
+            "Classificação dos benefícios coletivos",
+            "Considerações finais",
+            "Referências",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=heading | estilo=heading 1",
+            "parágrafo 2 | tipo=heading | estilo=heading 1",
+            "parágrafo 3 | tipo=heading | estilo=heading 1 | numerado=sim",
+            "parágrafo 4 | tipo=reference_heading | estilo=heading 1 | numerado=sim",
+        ],
+    )
+
+    assert any(item.issue_excerpt == "Introdução" and item.suggested_fix == "1. Introdução" for item in normalized)
+    assert any(item.issue_excerpt == "Classificação dos benefícios coletivos" and item.suggested_fix == "2. Classificação dos benefícios coletivos" for item in normalized)
+
+
 def test_sinopse_abstract_td_prompt_requires_jel_after_pt_and_en_blocks():
     instruction = load_agent_instruction("sinopse_abstract", profile_key="TD")
 
@@ -1304,6 +1800,31 @@ def test_normalize_batch_comments_discards_structure_title_mention_inside_paragr
         "Este trabalho apresenta uma proposta de classificação. A seção Classificação dos benefícios coletivos será retomada mais adiante."
     ]
     refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="estrutura",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_structure_comment_with_paragraph_reference():
+    comments = [
+        AgentComment(
+            agent="estrutura",
+            category="Hierarquia quebrada",
+            message="A seção 'Referências' (parágrafo 328) está em nível incompatível.",
+            paragraph_index=0,
+            issue_excerpt="Referências",
+            suggested_fix="Alterar a numeração da seção, por exemplo, '2 Referências'.",
+        )
+    ]
+    chunks = ["Referências"]
+    refs = ["parágrafo 1 | tipo=heading"]
 
     normalized = _normalize_batch_comments(
         comments,

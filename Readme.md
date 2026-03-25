@@ -214,12 +214,31 @@ O sistema exporta:
 - DOCX comentado;
 - DOCX já com autoajustes aplicados quando cabível.
 
+### Siglas curtas dos agentes nas saídas
+
+Os nomes internos dos agentes continuam longos no código, mas as saídas visíveis para usuário usam siglas curtas e autoexplicativas no DOCX comentado, no relatório JSON e na interface.
+
+Mapeamento atual:
+- `metadados` -> `meta`
+- `sinopse_abstract` -> `sin_abs`
+- `estrutura` -> `estrut`
+- `gramatica_ortografia` -> `gram`
+- `tabelas_figuras` -> `tab_fig`
+- `referencias` -> `refs`
+- `tipografia` -> `tipo`
+- `coordenador` -> `coord`
+
+Esse mapeamento fica centralizado em [models.py](/D:/github/lang_IPEA_editorial/src/editorial_docx/models.py).
+
 ## Ordem Atual dos Agentes
 
 A ordem atual está em [prompt.py](/D:/github/lang_IPEA_editorial/src/editorial_docx/prompts/prompt.py):
 
 ```python
 AGENT_ORDER = [
+    "metadados",
+    "sinopse_abstract",
+    "estrutura",
     "gramatica_ortografia",
     "tabelas_figuras",
     "referencias",

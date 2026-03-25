@@ -7,6 +7,7 @@ from pathlib import Path
 from .docx_utils import apply_comments_to_docx
 from .document_loader import load_document
 from .graph_chat import run_conversation
+from .models import agent_short_label
 from .prompts import AGENT_ORDER
 
 
@@ -49,7 +50,7 @@ def main() -> int:
         json.dumps(
             [
                 {
-                    "agent": c.agent,
+                    "agent": agent_short_label(c.agent),
                     "category": c.category,
                     "message": c.message,
                     "paragraph_index": c.paragraph_index,

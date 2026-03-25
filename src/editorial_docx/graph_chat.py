@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Callable
 from json import JSONDecodeError
 from typing import TypedDict
@@ -11,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from .context_selector import build_excerpt
 from .document_loader import Section
 from .llm import get_chat_model
-from .models import AgentComment, ConversationResult
+from .models import AgentComment, ConversationResult, agent_short_label
 from .prompts import AGENT_ORDER, AgentCommentsPayload, build_agent_prompt, build_coordinator_prompt
 
 
@@ -43,6 +44,7 @@ _ILLUSTRATION_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _QUOTED_EXCERPT_RE = re.compile(r'^\s*["“”\'‘’«»].+["“”\'‘’«»]\s*$')
+_QUOTE_CHAR_RE = re.compile(r'["â€œâ€\'â€˜â€™Â«Â»]')
 _STYLE_BY_BLOCK_TYPE = {
     "heading": {"TITULO_1", "TITULO_2", "TITULO_3", "TÍTULO_1", "TÍTULO_2", "TÍTULO_3"},
     "paragraph": {"TEXTO"},
@@ -51,6 +53,12 @@ _STYLE_BY_BLOCK_TYPE = {
     "reference_heading": {"TITULO_1", "TÍTULO_1"},
     "caption": {"TEXTO", "FONTE_TABELA_GRAFICO", "TEXTO_TABELA"},
 }
+
+
+_SAFE_QUOTED_EXCERPT_RE = re.compile(r'^\s*["\u201c\u201d\'\u2018\u2019\u00ab\u00bb].+["\u201c\u201d\'\u2018\u2019\u00ab\u00bb]\s*$')
+_SAFE_QUOTE_CHAR_RE = re.compile(r'["\u201c\u201d\'\u2018\u2019\u00ab\u00bb]')
+_HEADING_NUMBER_PREFIX_RE = re.compile(r"^\s*(?:(?:\d+(?:\.\d+)*)\.?|[ivxlcdm]+\.?)\s+", re.IGNORECASE)
+_REF_NUMBERING_RE = re.compile(r"\bnumerado=sim\b", re.IGNORECASE)
 
 
 def _sanitize_for_llm(text: str) -> str:
@@ -209,7 +217,104 @@ def _looks_like_all_caps_title(text: str) -> bool:
 
 def _looks_like_quoted_excerpt(text: str) -> bool:
     stripped = (text or "").strip()
-    return bool(stripped and _QUOTED_EXCERPT_RE.match(stripped))
+    return bool(stripped and _SAFE_QUOTED_EXCERPT_RE.match(stripped))
+
+
+def _contains_quote_marks(text: str) -> bool:
+    return bool(_SAFE_QUOTE_CHAR_RE.search(text or ""))
+
+
+def _ascii_fold(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _strip_heading_prefix(text: str) -> str:
+    return _HEADING_NUMBER_PREFIX_RE.sub("", (text or "").strip())
+
+
+def _heading_word_count(text: str) -> int:
+    stripped = _strip_heading_prefix(text)
+    return len(re.findall(r"[A-Za-zÀ-ÿ0-9]+", stripped))
+
+
+def _ref_has_numbering(ref: str) -> bool:
+    return bool(_REF_NUMBERING_RE.search(ref or ""))
+
+
+def _is_implicit_heading_candidate(index: int, chunks: list[str], refs: list[str]) -> bool:
+    if not (0 <= index < len(chunks)):
+        return False
+    ref_type = _ref_block_type(refs[index]) if index < len(refs) else ""
+    if ref_type not in {"", "paragraph", "heading"}:
+        return False
+
+    text = (chunks[index] or "").strip()
+    if not text or _heading_word_count(text) == 0 or _heading_word_count(text) > 4:
+        return False
+
+    stripped = _strip_heading_prefix(text)
+    if not stripped:
+        return False
+    if stripped[-1] in ".!?;:":
+        return False
+    if _contains_quote_marks(stripped):
+        return False
+
+    folded = _ascii_fold(stripped).casefold()
+    banned_prefixes = {
+        "fonte",
+        "elaboracao",
+        "elaboração",
+        "nota",
+        "nota:",
+        "figura",
+        "grafico",
+        "gráfico",
+        "tabela",
+        "quadro",
+        "imagem",
+        "palavras-chave",
+        "keywords",
+        "jel",
+        "abstract",
+        "sinopse",
+    }
+    if any(folded.startswith(prefix) for prefix in banned_prefixes):
+        return False
+
+    if stripped[0].islower():
+        return False
+
+    next_idx = index + 1
+    if next_idx >= len(chunks):
+        return False
+    next_text = (chunks[next_idx] or "").strip()
+    next_ref_type = _ref_block_type(refs[next_idx]) if next_idx < len(refs) else ""
+    if next_ref_type not in {"", "paragraph"}:
+        return False
+    if len(re.findall(r"[A-Za-zÀ-ÿ0-9]+", next_text)) < 6:
+        return False
+
+    return True
+
+
+def _is_intro_heading(text: str) -> bool:
+    stripped = _strip_heading_prefix(text)
+    if not stripped:
+        return False
+    folded = _ascii_fold(stripped).casefold()
+    return any(
+        folded.startswith(prefix)
+        for prefix in (
+            "introducao",
+            "introduction",
+            "consideracoes iniciais",
+            "consideracoes introdutorias",
+            "nota introdutoria",
+            "notas introdutorias",
+        )
+    )
 
 
 def _removes_terminal_period_only(issue_excerpt: str, suggested_fix: str) -> bool:
@@ -222,6 +327,267 @@ def _removes_terminal_period_only(issue_excerpt: str, suggested_fix: str) -> boo
 
 def _years_in_text(text: str) -> list[str]:
     return re.findall(r"\b(?:19|20)\d{2}\b", text or "")
+
+
+def _quoted_terms(text: str) -> list[str]:
+    return re.findall(r"[\"']([^\"']{2,80})[\"']", text or "")
+
+
+def _word_tokens(text: str) -> list[str]:
+    return re.findall(r"[A-Za-zÀ-ÿ0-9]+", text or "", flags=re.UNICODE)
+
+
+def _punctuation_only_change(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue_tokens = _word_tokens(issue_excerpt.casefold())
+    suggestion_tokens = _word_tokens(suggested_fix.casefold())
+    return bool(issue_tokens) and issue_tokens == suggestion_tokens
+
+
+def _adds_coordination_comma(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue_norm = _normalized_text(issue_excerpt)
+    suggestion_norm = _normalized_text(suggested_fix)
+    if not issue_norm or not suggestion_norm or not _punctuation_only_change(issue_excerpt, suggested_fix):
+        return False
+    return any(
+        marker in suggestion_norm and marker not in issue_norm
+        for marker in {", e ", ", ou ", ", nem "}
+    )
+
+
+def _is_demonstrative_swap(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue_tokens = _word_tokens(issue_excerpt.casefold())
+    suggestion_tokens = _word_tokens(suggested_fix.casefold())
+    if issue_tokens == suggestion_tokens or len(issue_tokens) != len(suggestion_tokens):
+        return False
+    allowed_swaps = {
+        ("esse", "este"),
+        ("este", "esse"),
+        ("essa", "esta"),
+        ("esta", "essa"),
+        ("esses", "estes"),
+        ("estes", "esses"),
+        ("essas", "estas"),
+        ("estas", "essas"),
+        ("isso", "isto"),
+        ("isto", "isso"),
+    }
+    diffs = [(left, right) for left, right in zip(issue_tokens, suggestion_tokens) if left != right]
+    return len(diffs) == 1 and diffs[0] in allowed_swaps
+
+
+def _drops_article_before_possessive(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue_tokens = _word_tokens(issue_excerpt.casefold())
+    suggestion_tokens = _word_tokens(suggested_fix.casefold())
+    if len(issue_tokens) != len(suggestion_tokens) + 1:
+        return False
+    possessives = {"seu", "sua", "seus", "suas"}
+    articles = {"o", "a", "os", "as"}
+    for idx in range(len(issue_tokens) - 1):
+        if issue_tokens[idx] in articles and issue_tokens[idx + 1] in possessives:
+            candidate = issue_tokens[:idx] + issue_tokens[idx + 1 :]
+            if candidate == suggestion_tokens:
+                return True
+    return False
+
+
+def _introduces_plural_copula_for_singular_head(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue_norm = f" {_normalized_text(issue_excerpt)} "
+    suggestion_norm = f" {_normalized_text(suggested_fix)} "
+    if not issue_norm.strip() or not suggestion_norm.strip():
+        return False
+    return issue_norm.lstrip().startswith(("o ", "a ")) and " é " in issue_norm and " são " in suggestion_norm
+
+
+def _looks_like_full_reference_rewrite(source_text: str, suggested_fix: str) -> bool:
+    source_tokens = _word_tokens(_normalized_text(source_text))
+    suggestion_tokens = _word_tokens(_normalized_text(suggested_fix))
+    if len(source_tokens) < 12 or len(suggestion_tokens) < 12:
+        return False
+    shared = len(set(source_tokens) & set(suggestion_tokens))
+    overlap = shared / max(len(set(source_tokens)), len(set(suggestion_tokens)))
+    return overlap >= 0.75 and abs(len(source_tokens) - len(suggestion_tokens)) <= 6
+
+
+def _dedupe_comments(items: list[AgentComment]) -> list[AgentComment]:
+    out: list[AgentComment] = []
+    seen: set[tuple[str, str, int | None, str, str, str, bool, str]] = set()
+    for item in items:
+        key = (
+            item.agent,
+            item.category,
+            item.paragraph_index,
+            (item.message or "").strip(),
+            (item.issue_excerpt or "").strip(),
+            (item.suggested_fix or "").strip(),
+            item.auto_apply,
+            (item.format_spec or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _heuristic_grammar_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    patterns: list[tuple[re.Pattern[str], str, str]] = [
+        (
+            re.compile(r"\bbenef[ií]cios monet[aá]rio\b", re.IGNORECASE),
+            "Concordância",
+            "benefícios monetários",
+        ),
+        (
+            re.compile(r"\bque assenta o acesso\b", re.IGNORECASE),
+            "Concordância",
+            "que assentam o acesso",
+        ),
+        (
+            re.compile(r"\bgrupos éticos\b", re.IGNORECASE),
+            "Ortografia",
+            "grupos étnicos",
+        ),
+    ]
+
+    comments: list[AgentComment] = []
+    for idx in batch_indexes:
+        if not (0 <= idx < len(chunks)):
+            continue
+        if _ref_block_type(refs[idx]) in {"direct_quote", "reference_entry"}:
+            continue
+        source_text = chunks[idx] or ""
+        for pattern, category, replacement in patterns:
+            match = pattern.search(source_text)
+            if not match:
+                continue
+            issue_excerpt = match.group(0)
+            if replacement.casefold() == issue_excerpt.casefold():
+                continue
+            comments.append(
+                AgentComment(
+                    agent="gramatica_ortografia",
+                    category=category,
+                    message="Corrigir o fragmento." if category == "Ortografia" else "Ajustar a concordância.",
+                    paragraph_index=idx,
+                    issue_excerpt=issue_excerpt,
+                    suggested_fix=replacement,
+                )
+            )
+
+    return comments
+
+
+def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    comments: list[AgentComment] = []
+    for idx in batch_indexes:
+        if not (0 <= idx < len(chunks)):
+            continue
+        if _ref_block_type(refs[idx]) != "reference_entry":
+            continue
+        source_text = chunks[idx] or ""
+        if not source_text.strip():
+            continue
+
+        leading_year_match = re.search(r"\((?P<year>(?:19|20)\d{2})\)", source_text)
+        trailing_year_matches = list(re.finditer(r"\b(?:19|20)\d{2}\b", source_text))
+        if leading_year_match and trailing_year_matches:
+            leading_year = leading_year_match.group("year")
+            trailing_year = trailing_year_matches[-1].group(0)
+            if leading_year != trailing_year and trailing_year_matches[-1].start() > len(source_text) * 0.45:
+                year_fragment = trailing_year
+                prefix = source_text[max(0, trailing_year_matches[-1].start() - 8) : trailing_year_matches[-1].start()]
+                if "," in prefix:
+                    year_fragment = prefix.split(",")[-1].strip() + trailing_year
+                comments.append(
+                    AgentComment(
+                        agent="referencias",
+                        category="inconsistency",
+                        message="Corrigir a inconsistência de ano.",
+                        paragraph_index=idx,
+                        issue_excerpt=year_fragment,
+                        suggested_fix=year_fragment.replace(trailing_year, leading_year),
+                    )
+                )
+
+        glued_match = re.search(r"((?:19|20)\d{2})\.([A-ZÁ-Ú])", source_text)
+        if glued_match:
+            comments.append(
+                AgentComment(
+                    agent="referencias",
+                    category="inconsistency",
+                    message="Separar as referências coladas.",
+                    paragraph_index=idx,
+                    issue_excerpt=glued_match.group(0),
+                    suggested_fix=f"{glued_match.group(1)}. {glued_match.group(2)}",
+                )
+            )
+
+        page_match = re.search(r"\bp\.(\d)", source_text)
+        if page_match:
+            issue_excerpt = source_text[page_match.start() : page_match.start() + 8].rstrip(" ,.;:")
+            comments.append(
+                AgentComment(
+                    agent="referencias",
+                    category="inconsistency",
+                    message="Inserir espaço após `p.`.",
+                    paragraph_index=idx,
+                    issue_excerpt=issue_excerpt,
+                    suggested_fix=issue_excerpt.replace("p.", "p. ", 1),
+                )
+            )
+
+    return comments
+
+
+def _is_same_top_level_heading(ref: str) -> bool:
+    ref_norm = _normalized_text(ref)
+    return "tipo=heading" in ref_norm and "heading 1" in ref_norm
+
+
+def _is_final_section_heading(text: str) -> bool:
+    folded = _ascii_fold(_strip_heading_prefix(text)).casefold()
+    return folded in {"consideracoes finais", "conclusao", "conclusoes", "referencias", "referencias bibliograficas"}
+
+
+def _heuristic_structure_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    intro_idx = next((idx for idx, chunk in enumerate(chunks) if _is_intro_heading(chunk)), None)
+    if intro_idx is None:
+        return []
+
+    top_level_indexes = [
+        idx
+        for idx, ref in enumerate(refs)
+        if idx >= intro_idx and (_is_same_top_level_heading(ref) or _ref_block_type(ref) == "reference_heading")
+    ]
+    ordinal_by_index = {idx: pos for pos, idx in enumerate(top_level_indexes, start=1)}
+    numbered_indexes = {
+        idx
+        for idx in top_level_indexes
+        if _ref_has_numbering(refs[idx]) or bool(_HEADING_NUMBER_PREFIX_RE.match((chunks[idx] or "").strip()))
+    }
+    require_numbering = bool(numbered_indexes)
+
+    comments: list[AgentComment] = []
+    target_indexes = sorted(set(batch_indexes) | set(top_level_indexes))
+    for idx in target_indexes:
+        if idx not in ordinal_by_index or not (0 <= idx < len(chunks)):
+            continue
+        text = (chunks[idx] or "").strip()
+        is_numbered = bool(_HEADING_NUMBER_PREFIX_RE.match(text))
+        if is_numbered:
+            continue
+        if require_numbering:
+            comments.append(
+                AgentComment(
+                    agent="estrutura",
+                    category="Numeração",
+                    message="Uniformizar a numeração das seções de mesmo nível.",
+                    paragraph_index=idx,
+                    issue_excerpt=text,
+                    suggested_fix=f"{ordinal_by_index[idx]}. {text}",
+                )
+            )
+
+    return comments
 
 
 def _find_metadata_like_indexes(chunks: list[str], refs: list[str], limit: int = 18) -> list[int]:
@@ -362,6 +728,20 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
     if agent == "estrutura" and comment.auto_apply:
         if not _is_safe_structure_auto_apply(comment, chunks):
             return False
+    if agent == "estrutura":
+        structure_blob = _normalized_text(" ".join([comment.message or "", comment.suggested_fix or ""]))
+        issue_core = _normalized_text(_strip_heading_prefix(comment.issue_excerpt or ""))
+        fix_core = _normalized_text(_strip_heading_prefix(comment.suggested_fix or ""))
+        if issue_core and comment.suggested_fix and issue_core not in fix_core:
+            return False
+        if re.search(r"\bpar[aá]grafo\s+\d+\b", structure_blob):
+            return False
+        if not comment.auto_apply and any(token in structure_blob for token in {"alterar a numeracao", "alterar a numeração", "por exemplo", "secao anterior", "seção anterior"}):
+            return False
+        if not comment.auto_apply and comment.suggested_fix and _heading_word_count(comment.suggested_fix) > 8:
+            return False
+        if any(token in structure_blob for token in {"não possui subseções", "nao possui subsecoes", "deveria ter", "adicionar subseções", "adicionar subsecoes"}):
+            return False
 
     if agent == "metadados":
         if block_type not in {"heading", "paragraph"}:
@@ -376,18 +756,27 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
 
     if agent == "tabelas_figuras":
+        if not (comment.issue_excerpt or "").strip():
+            return False
         issue_excerpt = _normalized_text(comment.issue_excerpt)
         table_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
         if block_type == "table_cell" and any(token in table_blob for token in {"subtitulo", "subtítulo", "fonte", "identificador", "legenda"}):
             return False
         if block_type != "caption" and any(token in table_blob for token in {"subtitulo", "subtítulo", "fonte"}):
             return False
+        if block_type == "caption" and re.match(r"^(tabela|figura|quadro|gr[aÃ¡]fico)\s+\d+[:\s]", issue_excerpt):
+            if any(token in table_blob for token in {"identificador", "titulo", "título", "subtitulo", "subtítulo"}):
+                return False
         if re.match(r"^(tabela|figura|quadro)\s+\d+", issue_excerpt):
             if "fonte" in _normalized_text(comment.message) or "fonte" in _normalized_text(comment.suggested_fix):
                 return False
         if "fonte" in _normalized_text(comment.message) and isinstance(comment.paragraph_index, int):
             if _has_neighbor_with_prefix(comment.paragraph_index, refs, chunks, ("Fonte:", "Elaboração:"), radius=2):
                 return False
+        if re.match(r"^(tabela|figura|quadro|gr[aÃ¡]fico)\s+\d+[:\s]", issue_excerpt) and any(
+            token in table_blob for token in {"falta o identificador", "nao possui um identificador", "nÃ£o possui um identificador"}
+        ):
+            return False
         if comment.auto_apply and not _is_safe_text_normalization_auto_apply(comment, chunks):
             return False
 
@@ -426,7 +815,10 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
         current = (chunks[comment.paragraph_index] or "").casefold()
         current_text = chunks[comment.paragraph_index] or ""
         message_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
+        suggestion_blob = _normalized_text(comment.suggested_fix)
         if any(token in message_blob for token in {"adicionar o titulo", "adicionar a pagina", "adicionar a paginacao", "adicionar o ano", "ano de publicacao", "verificar e corrigir o ano"}):
+            return False
+        if any(token in message_blob for token in {"falta de informacoes", "falta de informações", "adicionar informacoes", "adicionar informações"}):
             return False
         if "caixa baixa" in message_blob or "caixa alta" in message_blob:
             return False
@@ -434,7 +826,15 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
         if any(token in message_blob for token in {"verificar", "confirmar", "informacoes suficientes", "informações suficientes"}) and _years_in_text(current_text):
             return False
+        if any(token in message_blob for token in {"titulo", "título", "autor", "ano", "periodico", "periódico"}) and _looks_like_full_reference_rewrite(current_text, comment.suggested_fix):
+            return False
+        if any(token in message_blob for token in {"titulo", "título"}) and re.search(r"\bpp?\.\s*\d", current_text):
+            return False
         if _normalized_text(comment.suggested_fix) == _normalized_text(current_text):
+            return False
+        if any(token in message_blob for token in {"padrao de formataÃ§Ã£o", "padrao de formatacao", "padrÃ£o de formataÃ§Ã£o"}):
+            return False
+        if any(token in suggestion_blob for token in {"[ano]", "[local]", "[editora]"}) or "[" in (comment.suggested_fix or ""):
             return False
         source_text = current_text
         if "titulo" in message_blob and _looks_like_all_caps_title(source_text):
@@ -458,6 +858,21 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
 
     if isinstance(comment.paragraph_index, int) and 0 <= comment.paragraph_index < len(chunks):
+        if agent == "sinopse_abstract":
+            synopsis_blob = _normalized_text(" ".join([comment.message or "", comment.suggested_fix or ""]))
+            if ("portugu" in synopsis_blob and "ingl" in synopsis_blob) or any(
+                token in synopsis_blob for token in {"português e inglês", "portugues e ingles"}
+            ):
+                return False
+            if any(
+                token in synopsis_blob
+                for token in {"nao inicia com letra maiuscula", "não inicia com letra maiúscula", "iniciar a frase com letra maiuscula", "iniciar a frase com letra maiúscula"}
+            ):
+                return False
+            quoted_terms = _quoted_terms(" ".join([comment.message or "", comment.suggested_fix or ""]))
+            issue_blob = _normalized_text(comment.issue_excerpt)
+            if quoted_terms and not any(_normalized_text(term) in issue_blob for term in quoted_terms):
+                return False
         if comment.issue_excerpt:
             excerpt_ok = _find_excerpt_index(comment.issue_excerpt, [comment.paragraph_index], chunks)
             if excerpt_ok is None and agent in {"gramatica_ortografia", "referencias"}:
@@ -467,9 +882,28 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             grammar_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
             if block_type == "direct_quote":
                 return False
+            if block_type == "reference_entry":
+                return False
             if _looks_like_quoted_excerpt(comment.issue_excerpt):
                 return False
+            excerpt = (comment.issue_excerpt or "").strip()
+            if _contains_quote_marks(source_text) and excerpt and len(excerpt) >= max(120, int(len(source_text) * 0.65)):
+                return False
+            if "pontua" in grammar_blob and excerpt and len(excerpt) > 120:
+                return False
+            if "concord" in grammar_blob and excerpt and len(excerpt) > 120:
+                return False
             if any(token in grammar_blob for token in {"clareza", "simplificada", "simplificar", "reestruturar", "reescr"}):
+                return False
+            if _adds_coordination_comma(excerpt or source_text, comment.suggested_fix):
+                return False
+            if _is_demonstrative_swap(excerpt or source_text, comment.suggested_fix):
+                return False
+            if _drops_article_before_possessive(excerpt or source_text, comment.suggested_fix):
+                return False
+            if _introduces_plural_copula_for_singular_head(excerpt or source_text, comment.suggested_fix):
+                return False
+            if "observam-se que" in _normalized_text(comment.suggested_fix):
                 return False
             if _normalized_text(comment.suggested_fix) == _normalized_text(source_text):
                 return False
@@ -531,7 +965,13 @@ def _normalize_batch_comments(
         remapped = _remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks)
         if _should_keep_comment(remapped, agent=agent, chunks=chunks, refs=refs):
             normalized.append(remapped)
-    return normalized
+    if agent == "gramatica_ortografia":
+        normalized.extend(_heuristic_grammar_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "referencias":
+        normalized.extend(_heuristic_reference_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "estrutura":
+        normalized.extend(_heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    return _dedupe_comments(normalized)
 
 
 def _agent_node(agent: str):
@@ -570,7 +1010,7 @@ def _coordinator_node(state: ChatState) -> ChatState:
     comments = state.get("comments", [])
     if model is None:
         if comments:
-            points = "\n".join(f"- [{c.agent}] {c.message}" for c in comments[:8])
+            points = "\n".join(f"- [{agent_short_label(c.agent)}] {c.message}" for c in comments[:8])
             answer = "Resumo dos agentes:\n" + points
         else:
             answer = "Não foi possível consultar a LLM. Configure OPENAI_API_KEY no .env."
@@ -587,7 +1027,7 @@ def _coordinator_node(state: ChatState) -> ChatState:
     except Exception as exc:
         if _is_json_body_error(exc):
             if comments:
-                points = "\n".join(f"- [{c.agent}] {c.message}" for c in comments[:12])
+                points = "\n".join(f"- [{agent_short_label(c.agent)}] {c.message}" for c in comments[:12])
                 return {"answer": "Resumo parcial (falha de payload da LLM no coordenador):\n" + points}
             return {"answer": "Falha ao montar payload para a LLM nesta execução."}
         raise
@@ -700,15 +1140,44 @@ def _agent_scope_indexes(agent: str, chunks: list[str], refs: list[str], section
             sections,
             ("sinopse", "abstract", "resumo", "summary"),
         )
-        content = _find_content_indexes(chunks, r"\b(sinopse|abstract|resumo|summary)\b")
-        picked = sorted(dict.fromkeys([*sec, *content]))
+        content = _find_content_indexes(chunks, r"\b(sinopse|abstract|resumo|summary|palavras-chave|keywords|jel)\b")
+        typed = _indexes_by_ref_type(
+            refs,
+            {"abstract_heading", "abstract_body", "keywords_label", "keywords_content", "jel_code"},
+        )
+        picked = _expand_neighbors(sorted(dict.fromkeys([*sec, *content, *typed])), total=total, radius=1)
         return picked or head_20
 
     if agent == "estrutura":
         typed = _indexes_by_ref_type(refs, {"heading", "reference_heading"})
         section_starts = sorted(dict.fromkeys(sec.start_idx for sec in sections))
-        picked = sorted(dict.fromkeys([*typed, *section_starts]))
-        return picked or typed or head_20
+        intro_start = next(
+            (
+                idx
+                for idx, chunk in enumerate(chunks)
+                if _is_intro_heading(chunk) and _is_implicit_heading_candidate(idx, chunks, refs)
+            ),
+            None,
+        )
+        if intro_start is None:
+            intro_start = next((idx for idx in sorted(dict.fromkeys([*typed, *section_starts])) if 0 <= idx < len(chunks) and _is_intro_heading(chunks[idx])), None)
+
+        implicit = [
+            idx
+            for idx in range(intro_start if intro_start is not None else 0, total)
+            if _is_implicit_heading_candidate(idx, chunks, refs)
+        ]
+        heading_candidates = sorted(dict.fromkeys([*typed, *section_starts, *implicit]))
+        if not heading_candidates:
+            return typed or head_20
+
+        scoped = [idx for idx in heading_candidates if intro_start is None or idx >= intro_start]
+        explicit_scoped = [idx for idx in scoped if idx in set(typed) or idx in set(section_starts)]
+        implicit_short_scoped = [
+            idx for idx in scoped if idx not in set(explicit_scoped) and 0 <= idx < len(chunks) and _heading_word_count(chunks[idx]) <= 4
+        ]
+        picked = sorted(dict.fromkeys([*explicit_scoped, *implicit_short_scoped]))
+        return picked or scoped or heading_candidates
 
     if agent == "tabelas_figuras":
         sec = _expand_section_ranges(sections, ("tabela", "figura", "quadro", "grafico", "gráfico", "anexo"))

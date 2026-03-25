@@ -16,7 +16,7 @@ from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document
 from src.editorial_docx.graph_chat import run_conversation
 from src.editorial_docx.llm import get_llm_config
-from src.editorial_docx.models import AgentComment
+from src.editorial_docx.models import AgentComment, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
 st.set_page_config(page_title="Editorial TD - Agentes", layout="wide")
@@ -136,7 +136,8 @@ def _build_rows() -> list[dict]:
         rows.append(
             {
                 "comment_idx": comment_idx,
-                "agente": c.agent,
+                "agente": agent_short_label(c.agent),
+                "agent_key": c.agent,
                 "categoria": c.category,
                 "referencia": ref,
                 "indice_trecho": c.paragraph_index,
@@ -176,7 +177,7 @@ def _signature(rows: list[dict]) -> str:
     base = [
         (
             str(r["comment_idx"]),
-            r["agente"],
+            r["agent_key"],
             r["categoria"],
             str(r["indice_trecho"]),
             r["comentario"],
@@ -237,7 +238,7 @@ def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
 
         export_comments.append(
             AgentComment(
-                agent=override["agente"],
+                agent=override["agent_key"],
                 category=override["categoria"],
                 paragraph_index=override["indice_trecho"],
                 message=override["comentario"],
@@ -677,7 +678,7 @@ with col_fix:
         with filter_a:
             agent_filter = st.multiselect(
                 "Filtrar agentes",
-                options=sorted({AGENT_LABELS.get(row["agente"], row["agente"]) for row in rows}),
+                options=sorted({row["agente"] for row in rows}),
                 default=[],
                 key="fix_agent_filter",
             )
@@ -694,7 +695,7 @@ with col_fix:
         visible_indexes: list[int] = []
         option_labels: list[str] = []
         for i, row in enumerate(rows):
-            agent_label = AGENT_LABELS.get(row["agente"], row["agente"])
+            agent_label = row["agente"]
             state = st.session_state.correction_state.get(str(i), {})
             if agent_filter and agent_label not in agent_filter:
                 continue
@@ -754,7 +755,7 @@ with col_fix:
         resolved = sum(1 for v in st.session_state.correction_state.values() if v.get("status") == "resolvido")
         st.progress(resolved / len(rows), text=f"{resolved}/{len(rows)} itens resolvidos")
 
-        st.markdown(f"**Agente:** `{AGENT_LABELS.get(row['agente'], row['agente'])}` | **Categoria:** `{row['categoria']}`")
+        st.markdown(f"**Agente:** `{row['agente']}` | **Categoria:** `{row['categoria']}`")
         st.markdown(f"**Referência:** {row['referencia']}")
         if is_auto_apply:
             st.caption("Este item será aplicado automaticamente no DOCX exportado.")

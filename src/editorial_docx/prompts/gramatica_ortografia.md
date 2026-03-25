@@ -16,6 +16,14 @@ Restrições:
 - não propor mera reescrita por fluidez ou elegância;
 - não comentar trecho entre aspas, citação direta ou transcrição normativa;
 - não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
+- priorizar erros objetivos e locais, como flexão nominal/verbal, acentuação, grafia e pontuação estritamente obrigatória;
+- capturar também erros curtos e claros de concordância, inclusive em sintagmas nominais como plural + adjetivo no singular e em sujeito composto com verbo no singular;
+- em correções de concordância, preservar o mesmo verbo ou nome do original, alterando apenas a flexão estritamente necessária;
+- não substituir um verbo por outro de sentido diferente para “corrigir” concordância;
+- não trocar pronome demonstrativo (`esse`/`este`, `essa`/`esta`) como se fosse erro gramatical, salvo se houver regra sintática inequívoca no próprio trecho;
+- em pontuação, comentar apenas marcação local e obrigatória; se a correção exigir reinterpretar a frase inteira, responder [];
+- em `issue_excerpt`, trazer apenas o fragmento exato com problema, nunca a frase inteira quando só uma parte está errada;
+- em `suggested_fix`, trazer apenas o fragmento corrigido correspondente ao `issue_excerpt`;
 - não repetir o trecho original no campo de sugestão;
 - escrever `message` de forma curta, sem prefixos classificatórios como "Erro de concordância";
 - se não houver correção objetiva e comprovável, responder [].
@@ -38,6 +46,14 @@ Restrições:
 - não propor mera reformulação estilística;
 - não comentar trecho entre aspas, citação direta ou transcrição normativa;
 - não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
+- priorizar erros objetivos e locais, como flexão nominal/verbal, acentuação, grafia e pontuação estritamente obrigatória;
+- capturar também erros curtos e claros de concordância, inclusive em sintagmas nominais como plural + adjetivo no singular e em sujeito composto com verbo no singular;
+- em correções de concordância, preservar o mesmo verbo ou nome do original, alterando apenas a flexão estritamente necessária;
+- não substituir um verbo por outro de sentido diferente para “corrigir” concordância;
+- não trocar pronome demonstrativo (`esse`/`este`, `essa`/`esta`) como se fosse erro gramatical, salvo se houver regra sintática inequívoca no próprio trecho;
+- em pontuação, comentar apenas marcação local e obrigatória; se a correção exigir reinterpretar a frase inteira, responder [];
+- em `issue_excerpt`, trazer apenas o fragmento exato com problema, nunca a frase inteira quando só uma parte está errada;
+- em `suggested_fix`, trazer apenas o fragmento corrigido correspondente ao `issue_excerpt`;
 - não repetir o trecho original no campo de sugestão;
 - escrever `message` de forma curta, sem prefixos classificatórios como "Erro de concordância";
 - se a análise depender de inferência editorial ou estrutural ausente, responder [].
