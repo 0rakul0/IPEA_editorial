@@ -11,6 +11,17 @@ from .models import agent_short_label
 from .prompts import AGENT_ORDER
 
 
+def _serialize_comment(comment) -> dict[str, object]:
+    return {
+        "agent": agent_short_label(comment.agent),
+        "category": comment.category,
+        "message": comment.message,
+        "paragraph_index": comment.paragraph_index,
+        "issue_excerpt": comment.issue_excerpt,
+        "suggested_fix": comment.suggested_fix,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Executa revisão editorial em arquivo DOCX/PDF.")
     parser.add_argument("input", type=Path, help="Caminho do arquivo de entrada (.docx ou .pdf)")
@@ -41,24 +52,18 @@ def main() -> int:
         question=args.question,
         selected_agents=AGENT_ORDER.copy(),
     )
-    visible_comments = [c for c in result.comments if not c.auto_apply]
-    auto_apply_count = len(result.comments) - len(visible_comments)
+    visible_comments = [c for c in result.comments if not (c.agent == "tipografia" and c.auto_apply)]
+    auto_applied_typography = [c for c in result.comments if c.agent == "tipografia" and c.auto_apply]
+    auto_apply_count = len(auto_applied_typography)
 
     base = args.input.with_suffix("")
     output_json = args.output_json or base.parent / f"{base.name}_output.relatorio.json"
     output_json.write_text(
         json.dumps(
-            [
-                {
-                    "agent": agent_short_label(c.agent),
-                    "category": c.category,
-                    "message": c.message,
-                    "paragraph_index": c.paragraph_index,
-                    "issue_excerpt": c.issue_excerpt,
-                    "suggested_fix": c.suggested_fix,
-                }
-                for c in visible_comments
-            ],
+            {
+                "visible_comments": [_serialize_comment(c) for c in visible_comments],
+                "auto_applied_typography": [_serialize_comment(c) for c in auto_applied_typography],
+            },
             ensure_ascii=False,
             indent=2,
         ),

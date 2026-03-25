@@ -666,6 +666,24 @@ def _remap_comment_index(comment: AgentComment, batch_indexes: list[int], chunks
     )
 
 
+def _limit_auto_apply(comment: AgentComment) -> AgentComment:
+    if not comment.auto_apply or comment.agent == "tipografia":
+        return comment
+    return AgentComment(
+        agent=comment.agent,
+        category=comment.category,
+        message=comment.message,
+        paragraph_index=comment.paragraph_index,
+        issue_excerpt=comment.issue_excerpt,
+        suggested_fix=comment.suggested_fix,
+        auto_apply=False,
+        format_spec=comment.format_spec,
+        review_status=comment.review_status,
+        approved_text=comment.approved_text,
+        reviewer_note=comment.reviewer_note,
+    )
+
+
 def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], refs: list[str]) -> bool:
     if not (comment.message or "").strip():
         return False
@@ -962,7 +980,7 @@ def _normalize_batch_comments(
 ) -> list[AgentComment]:
     normalized: list[AgentComment] = []
     for comment in comments:
-        remapped = _remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks)
+        remapped = _limit_auto_apply(_remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks))
         if _should_keep_comment(remapped, agent=agent, chunks=chunks, refs=refs):
             normalized.append(remapped)
     if agent == "gramatica_ortografia":

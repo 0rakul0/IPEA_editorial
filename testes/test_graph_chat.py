@@ -870,7 +870,7 @@ def test_normalize_batch_comments_accepts_safe_structure_auto_apply():
     )
 
     assert len(normalized) == 1
-    assert normalized[0].auto_apply is True
+    assert normalized[0].auto_apply is False
 
 
 def test_normalize_batch_comments_rejects_unsafe_structure_auto_apply():
@@ -896,7 +896,8 @@ def test_normalize_batch_comments_rejects_unsafe_structure_auto_apply():
         refs=refs,
     )
 
-    assert normalized == []
+    assert len(normalized) == 1
+    assert normalized[0].auto_apply is False
 
 
 def test_normalize_batch_comments_accepts_safe_reference_auto_apply():
@@ -923,7 +924,7 @@ def test_normalize_batch_comments_accepts_safe_reference_auto_apply():
     )
 
     assert len(normalized) == 1
-    assert normalized[0].auto_apply is True
+    assert normalized[0].auto_apply is False
 
 
 def test_normalize_batch_comments_rejects_unsafe_reference_auto_apply():
@@ -949,7 +950,8 @@ def test_normalize_batch_comments_rejects_unsafe_reference_auto_apply():
         refs=refs,
     )
 
-    assert normalized == []
+    assert len(normalized) == 1
+    assert normalized[0].auto_apply is False
 
 
 def test_normalize_batch_comments_discards_metadados_outside_front_matter():
@@ -1002,7 +1004,7 @@ def test_normalize_batch_comments_discards_structure_numbering_claim_in_body_par
     assert normalized == []
 
 
-def test_normalize_batch_comments_accepts_safe_table_caption_auto_apply():
+def test_normalize_batch_comments_discards_table_caption_auto_apply_even_when_marked_safe():
     comments = [
         AgentComment(
             agent="tabelas_figuras",
@@ -1025,8 +1027,7 @@ def test_normalize_batch_comments_accepts_safe_table_caption_auto_apply():
         refs=refs,
     )
 
-    assert len(normalized) == 1
-    assert normalized[0].auto_apply is True
+    assert normalized == []
 
 
 def test_normalize_batch_comments_rejects_unsafe_table_caption_auto_apply():
@@ -1264,7 +1265,7 @@ def test_apply_comments_to_docx_auto_applies_typography_formatting(tmp_path):
     assert 'w:jc w:val="both"' in document_xml
 
 
-def test_apply_comments_to_docx_auto_applies_safe_structure_heading_normalization(tmp_path):
+def test_apply_comments_to_docx_does_not_auto_apply_structure_heading_normalization(tmp_path):
     docx_path = tmp_path / "mini_estrutura.docx"
     content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -1316,10 +1317,10 @@ def test_apply_comments_to_docx_auto_applies_safe_structure_heading_normalizatio
     with ZipFile(out_path, "r") as zf:
         document_xml = zf.read("word/document.xml").decode("utf-8")
 
-    assert "1. INTRODUÇÃO" in document_xml
+    assert "1 Introdução" in document_xml
 
 
-def test_apply_comments_to_docx_auto_applies_safe_reference_normalization(tmp_path):
+def test_apply_comments_to_docx_does_not_auto_apply_reference_normalization(tmp_path):
     docx_path = tmp_path / "mini_referencia.docx"
     content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -1371,7 +1372,7 @@ def test_apply_comments_to_docx_auto_applies_safe_reference_normalization(tmp_pa
     with ZipFile(out_path, "r") as zf:
         document_xml = zf.read("word/document.xml").decode("utf-8")
 
-    assert "Título do artigo, v. 2" in document_xml
+    assert "Título do artigo , v. 2" in document_xml
 
 
 def test_apply_comments_to_docx_consolidates_multiple_comments_on_same_paragraph(tmp_path):

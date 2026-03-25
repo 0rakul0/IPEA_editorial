@@ -913,12 +913,6 @@ def _apply_auto_formatting(paragraphs: list[etree._Element], non_empty_indexes: 
             if not spec:
                 continue
             _apply_paragraph_formatting(paragraph, spec)
-            continue
-        if _is_safe_heading_normalization(item, _paragraph_text(paragraph)):
-            _replace_paragraph_text(paragraph, item.suggested_fix.strip())
-            continue
-        if _is_safe_plain_text_normalization(item, _paragraph_text(paragraph)):
-            _replace_paragraph_text(paragraph, item.suggested_fix.strip())
 
 
 def _resolve_docx_paragraph_index(item: AgentComment, non_empty_indexes: list[int]) -> int | None:
@@ -998,7 +992,7 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
     paragraphs = document_root.findall(".//w:p", namespaces=NS)
     non_empty_indexes = [i for i, p in enumerate(paragraphs) if _paragraph_text(p).strip()]
     _apply_auto_formatting(paragraphs, non_empty_indexes, comments)
-    visible_comments = [item for item in comments if not item.auto_apply]
+    visible_comments = [item for item in comments if not (item.agent == "tipografia" and item.auto_apply)]
 
     grouped_comments: dict[int, list[AgentComment]] = {}
     for item in visible_comments:
