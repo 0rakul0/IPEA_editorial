@@ -33,6 +33,7 @@ _ALLOWED_TYPOGRAPHY_KEYS = {
     "size_pt",
     "bold",
     "italic",
+    "case",
     "align",
     "space_before_pt",
     "space_after_pt",
@@ -196,7 +197,7 @@ def _style_name_looks_explicit(style_name: str) -> bool:
 
 
 def _is_relevant_typography_spec(spec: dict[str, str]) -> bool:
-    strong_keys = {"font", "size_pt", "bold", "italic", "align", "left_indent_pt"}
+    strong_keys = {"size_pt", "bold", "italic", "case", "align", "left_indent_pt"}
     if any(key in spec for key in strong_keys):
         return True
     spacing_keys = [key for key in ("space_before_pt", "space_after_pt", "line_spacing") if key in spec]
@@ -240,6 +241,10 @@ def _heading_word_count(text: str) -> int:
 
 def _ref_has_numbering(ref: str) -> bool:
     return bool(_REF_NUMBERING_RE.search(ref or ""))
+
+
+def _ref_has_flag(ref: str, flag: str) -> bool:
+    return f"{flag}=sim" in _normalized_text(ref or "")
 
 
 def _is_implicit_heading_candidate(index: int, chunks: list[str], refs: list[str]) -> bool:
@@ -466,7 +471,7 @@ def _heuristic_grammar_comments(batch_indexes: list[int], chunks: list[str], ref
                 AgentComment(
                     agent="gramatica_ortografia",
                     category=category,
-                    message="Corrigir o fragmento." if category == "Ortografia" else "Ajustar a concordância.",
+                    message="Há um erro ortográfico neste fragmento." if category == "Ortografia" else "A concordância está incorreta neste fragmento.",
                     paragraph_index=idx,
                     issue_excerpt=issue_excerpt,
                     suggested_fix=replacement,
@@ -501,7 +506,7 @@ def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], r
                     AgentComment(
                         agent="referencias",
                         category="inconsistency",
-                        message="Corrigir a inconsistência de ano.",
+                        message="Há inconsistência de ano nesta referência.",
                         paragraph_index=idx,
                         issue_excerpt=year_fragment,
                         suggested_fix=year_fragment.replace(trailing_year, leading_year),
@@ -514,10 +519,27 @@ def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], r
                 AgentComment(
                     agent="referencias",
                     category="inconsistency",
-                    message="Separar as referências coladas.",
+                    message="Há duas referências coladas neste ponto.",
                     paragraph_index=idx,
                     issue_excerpt=glued_match.group(0),
                     suggested_fix=f"{glued_match.group(1)}. {glued_match.group(2)}",
+                )
+            )
+
+        duplicated_place_match = re.search(
+            r"(?P<place>[A-ZÀ-ÿ][^:.;]{2,60})\s*:\s*(?P=place),\s*(?P<year>(?:19|20)\d{2})",
+            source_text,
+        )
+        if duplicated_place_match:
+            repeated_fragment = duplicated_place_match.group(0).strip()
+            comments.append(
+                AgentComment(
+                    agent="referencias",
+                    category="inconsistency",
+                    message="Há duplicação de local e editora no trecho final da referência.",
+                    paragraph_index=idx,
+                    issue_excerpt=repeated_fragment,
+                    suggested_fix="Revisar a editora no trecho final, pois local e editora foram repetidos.",
                 )
             )
 
@@ -528,10 +550,104 @@ def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], r
                 AgentComment(
                     agent="referencias",
                     category="inconsistency",
-                    message="Inserir espaço após `p.`.",
+                    message="A paginação está sem espaço após `p.`.",
                     paragraph_index=idx,
                     issue_excerpt=issue_excerpt,
                     suggested_fix=issue_excerpt.replace("p.", "p. ", 1),
+                )
+            )
+
+        if "disponível em:" in _normalized_text(source_text) and "acesso em:" not in _normalized_text(source_text):
+            url_fragment = source_text[source_text.casefold().find("disponível em:") :].strip()
+            comments.append(
+                AgentComment(
+                    agent="referencias",
+                    category="inconsistency",
+                    message="A referência online informa a URL, mas não traz `Acesso em:` ao final.",
+                    paragraph_index=idx,
+                    issue_excerpt=url_fragment,
+                    suggested_fix="Inserir `Acesso em:` com a data de consulta após a URL.",
+                )
+            )
+
+        stripped_source = source_text.rstrip()
+        if stripped_source and stripped_source[-1] not in ".!?":
+            tail_fragment = stripped_source[-80:].strip()
+            if re.search(r"\b(?:19|20)\d{2}$", stripped_source) or re.search(r"\bacesso em:\s*\d{1,2}\s+\w+\.\s+\d{4}$", _normalized_text(stripped_source)):
+                comments.append(
+                    AgentComment(
+                        agent="referencias",
+                        category="inconsistency",
+                        message="A referência termina sem ponto final.",
+                        paragraph_index=idx,
+                        issue_excerpt=tail_fragment,
+                        suggested_fix=f"{tail_fragment}.",
+                    )
+                )
+
+    return comments
+
+
+def _heuristic_table_figure_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    comments: list[AgentComment] = []
+    source_prefixes = ("fonte:", "elaboração:", "elaboracao:")
+
+    for idx in batch_indexes:
+        if not (0 <= idx < len(chunks)) or idx >= len(refs):
+            continue
+        if _ref_block_type(refs[idx]) != "caption":
+            continue
+
+        text = (chunks[idx] or "").strip()
+        if not text:
+            continue
+
+        caption_match = re.match(r"^(?P<label>tabela|figura|quadro|gr[aá]fico)\s+(?P<number>\d+)\s*:\s*(?P<title>.+)$", text, re.IGNORECASE)
+        if caption_match:
+            label = caption_match.group("label").upper()
+            number = caption_match.group("number")
+            title = caption_match.group("title").strip()
+            comments.append(
+                AgentComment(
+                    agent="tabelas_figuras",
+                    category="Legenda",
+                    message="O identificador e o subtítulo estão fundidos na mesma linha da legenda.",
+                    paragraph_index=idx,
+                    issue_excerpt=text,
+                    suggested_fix=f"{label} {number}\n{title}",
+                )
+            )
+
+        found_source = False
+        saw_block_content = False
+        for next_idx in range(idx + 1, len(chunks)):
+            next_text = (chunks[next_idx] or "").strip()
+            next_norm = _normalized_text(next_text)
+            next_type = _ref_block_type(refs[next_idx]) if next_idx < len(refs) else ""
+
+            if next_norm.startswith(source_prefixes):
+                found_source = True
+                break
+            if next_type == "table_cell":
+                saw_block_content = True
+                continue
+            if next_type in {"caption", "heading", "reference_heading"}:
+                break
+            if next_type in {"paragraph", "reference_entry"}:
+                break
+            if not next_text:
+                continue
+            break
+
+        if not found_source and (saw_block_content or caption_match):
+            comments.append(
+                AgentComment(
+                    agent="tabelas_figuras",
+                    category="Fonte",
+                    message="O bloco está sem uma linha de fonte ou elaboração logo abaixo da legenda.",
+                    paragraph_index=idx,
+                    issue_excerpt=text,
+                    suggested_fix="Adicionar uma linha própria com `Fonte:` ou `Elaboração:` abaixo do bloco.",
                 )
             )
 
@@ -580,13 +696,44 @@ def _heuristic_structure_comments(batch_indexes: list[int], chunks: list[str], r
                 AgentComment(
                     agent="estrutura",
                     category="Numeração",
-                    message="Uniformizar a numeração das seções de mesmo nível.",
+                    message="Este título de mesmo nível está sem a numeração usada nas demais seções.",
                     paragraph_index=idx,
                     issue_excerpt=text,
                     suggested_fix=f"{ordinal_by_index[idx]}. {text}",
                 )
             )
 
+    return comments
+
+
+def _heuristic_typography_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    comments: list[AgentComment] = []
+    for idx in batch_indexes:
+        if not (0 <= idx < len(chunks)) or idx >= len(refs):
+            continue
+        ref = refs[idx]
+        if _ref_block_type(ref) != "heading":
+            continue
+        style_name = _ref_style_name(ref).casefold()
+        if style_name not in {"heading 1", "heading 2", "heading 3"}:
+            continue
+        if not _ref_has_flag(ref, "italico"):
+            continue
+        text = (chunks[idx] or "").strip()
+        if not text:
+            continue
+        comments.append(
+            AgentComment(
+                agent="tipografia",
+                category="inconsistency",
+                message="Neste subtítulo, o itálico destoa do padrão tipográfico do mesmo nível.",
+                paragraph_index=idx,
+                issue_excerpt=text,
+                suggested_fix="Remover itálico do título.",
+                auto_apply=False,
+                format_spec="italic=false",
+            )
+        )
     return comments
 
 
@@ -667,7 +814,7 @@ def _remap_comment_index(comment: AgentComment, batch_indexes: list[int], chunks
 
 
 def _limit_auto_apply(comment: AgentComment) -> AgentComment:
-    if not comment.auto_apply or comment.agent == "tipografia":
+    if not comment.auto_apply:
         return comment
     return AgentComment(
         agent=comment.agent,
@@ -784,10 +931,17 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
         if block_type == "caption" and re.match(r"^(tabela|figura|quadro|gr[aÃ¡]fico)\s+\d+[:\s]", issue_excerpt):
             if any(token in table_blob for token in {"identificador", "titulo", "título", "subtitulo", "subtítulo"}):
-                return False
+                if any(token in table_blob for token in {"mesma linha", "fundidos", "linha da legenda", "linha propria", "linha própria"}):
+                    pass
+                else:
+                    return False
         if re.match(r"^(tabela|figura|quadro)\s+\d+", issue_excerpt):
-            if "fonte" in _normalized_text(comment.message) or "fonte" in _normalized_text(comment.suggested_fix):
-                return False
+            source_blob = _normalized_text(" ".join([comment.message or "", comment.suggested_fix or ""]))
+            if "fonte" in source_blob:
+                if "abaixo do bloco" in source_blob or "linha propria" in source_blob or "linha própria" in source_blob:
+                    pass
+                else:
+                    return False
         if "fonte" in _normalized_text(comment.message) and isinstance(comment.paragraph_index, int):
             if _has_neighbor_with_prefix(comment.paragraph_index, refs, chunks, ("Fonte:", "Elaboração:"), radius=2):
                 return False
@@ -799,8 +953,6 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
 
     if agent == "tipografia":
-        if not comment.auto_apply:
-            return False
         spec = _parse_format_spec(comment.format_spec)
         if not spec:
             return False
@@ -817,8 +969,6 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
         if block_type not in {"heading", "caption", "paragraph"}:
             return False
         tipografia_blob = _normalized_text(" ".join([comment.message or "", comment.suggested_fix or ""]))
-        if any(token in tipografia_blob for token in {"caixa alta", "caixa baixa", "capitaliza", "maiusc", "minusc"}):
-            return False
         if "alterar para '" in (comment.suggested_fix or "").casefold() or 'alterar para "' in (comment.suggested_fix or "").casefold():
             return False
         if any(token in _normalized_text(comment.suggested_fix) for token in {"reescrever", "substituir texto", "alterar conteúdo"}):
@@ -832,6 +982,7 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
     if agent == "referencias" and isinstance(comment.paragraph_index, int):
         current = (chunks[comment.paragraph_index] or "").casefold()
         current_text = chunks[comment.paragraph_index] or ""
+        raw_message = (comment.message or "").casefold()
         message_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
         suggestion_blob = _normalized_text(comment.suggested_fix)
         if any(token in message_blob for token in {"adicionar o titulo", "adicionar a pagina", "adicionar a paginacao", "adicionar o ano", "ano de publicacao", "verificar e corrigir o ano"}):
@@ -844,6 +995,30 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
         if any(token in message_blob for token in {"verificar", "confirmar", "informacoes suficientes", "informações suficientes"}) and _years_in_text(current_text):
             return False
+        if any(token in message_blob for token in {"pontuacao final", "pontuação final", "ponto final", "pontuacao ao final", "pontuação ao final"}):
+            if (current_text or "").rstrip().endswith((".", "!", "?")):
+                return False
+        if "in:" in current_text.casefold() and ("in:" in raw_message and ("uso incorreto" in raw_message or "inserir" in raw_message)):
+            return False
+        if "uso incorreto" in raw_message and "n." in raw_message:
+            return False
+        if "v." in raw_message and "espa" in raw_message and "volume" in raw_message:
+            if "v." not in current_text:
+                return False
+        if ":" in raw_message and "espa" in raw_message:
+            if not re.search(r":\S", comment.issue_excerpt or ""):
+                return False
+        if ("pontuação entre o título e a editora" in raw_message or "pontuacao entre o titulo e a editora" in _normalized_text(raw_message)):
+            if "texto para discussão" in current_text.casefold() or "texto para discussao" in _normalized_text(current_text):
+                return False
+        if "titulo e a editora" in message_blob and "texto para discuss" in _normalized_text(current_text):
+            return False
+        if "n." in raw_message and "ponto" in raw_message:
+            if re.search(r"\bn\.\s*\d+\s*,", current_text, re.IGNORECASE):
+                return False
+        if ("ponto final após o número" in raw_message or "ponto final apos o numero" in _normalized_text(raw_message)):
+            if re.search(r"\bn\.\s*\d+\s*,", comment.issue_excerpt or "", re.IGNORECASE):
+                return False
         if any(token in message_blob for token in {"titulo", "título", "autor", "ano", "periodico", "periódico"}) and _looks_like_full_reference_rewrite(current_text, comment.suggested_fix):
             return False
         if any(token in message_blob for token in {"titulo", "título"}) and re.search(r"\bpp?\.\s*\d", current_text):
@@ -985,10 +1160,14 @@ def _normalize_batch_comments(
             normalized.append(remapped)
     if agent == "gramatica_ortografia":
         normalized.extend(_heuristic_grammar_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "tabelas_figuras":
+        normalized.extend(_heuristic_table_figure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "referencias":
         normalized.extend(_heuristic_reference_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "estrutura":
         normalized.extend(_heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "tipografia":
+        normalized.extend(_heuristic_typography_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     return _dedupe_comments(normalized)
 
 

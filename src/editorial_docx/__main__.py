@@ -52,18 +52,14 @@ def main() -> int:
         question=args.question,
         selected_agents=AGENT_ORDER.copy(),
     )
-    visible_comments = [c for c in result.comments if not (c.agent == "tipografia" and c.auto_apply)]
-    auto_applied_typography = [c for c in result.comments if c.agent == "tipografia" and c.auto_apply]
-    auto_apply_count = len(auto_applied_typography)
+    visible_comments = result.comments[:]
+    auto_apply_count = 0
 
     base = args.input.with_suffix("")
     output_json = args.output_json or base.parent / f"{base.name}_output.relatorio.json"
     output_json.write_text(
         json.dumps(
-            {
-                "visible_comments": [_serialize_comment(c) for c in visible_comments],
-                "auto_applied_typography": [_serialize_comment(c) for c in auto_applied_typography],
-            },
+            [_serialize_comment(c) for c in visible_comments],
             ensure_ascii=False,
             indent=2,
         ),

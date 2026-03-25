@@ -36,15 +36,22 @@ Restrições:
 - não fundir identificador, subtítulo e fonte na mesma linha;
 - nunca sugerir inserir "Fonte:" dentro da legenda descritiva;
 - se a legenda já começar por `Tabela`, `Figura`, `Quadro` ou `Gráfico` seguido de numeração, não apontar ausência de identificador;
-- se a própria legenda já trouxer identificador e título na mesma linha, não exigir subtítulo separado sem evidência do bloco completo;
+- se a própria legenda trouxer identificador e subtítulo na mesma linha, você PODE comentar quando o bloco mostrar que o template exige linhas separadas;
 - não produzir comentário quando `issue_excerpt` vier vazio;
 - dados internos e células da tabela não são evidência suficiente para concluir ausência de identificador, subtítulo ou fonte;
 - se a legenda já estiver correta, não sugerir acrescentar nela a fonte dos dados;
 - quando faltar fonte, a correção deve ser em linha separada, abaixo da tabela/figura;
+- se o bloco mostrar a legenda e as linhas seguintes sem `Fonte:` ou `Elaboração:`, você PODE apontar ausência de linha de fonte abaixo do bloco;
 - se houver ausência de fonte, formular a sugestão como inclusão de uma linha própria abaixo do bloco;
 - autocorrigir silenciosamente apenas caixa, pontuação e padronização do identificador/título já presentes;
 - não autocorrigir inclusão de "Fonte:", "Elaboração:" ou qualquer conteúdo ausente;
 - se o trecho analisado for apenas a legenda, sem o bloco completo, responder [] em vez de presumir ausência de fonte;
 - se o trecho disponível não mostrar a área da fonte, responder [];
 - se o trecho analisado for uma célula interna da tabela, limitar-se a rótulos, unidades, siglas e legibilidade, sem inferir falta de subtítulo ou fonte do bloco.
+
+Mensagens:
+- explicar de forma local o que está errado no bloco;
+- em `suggested_fix`, mostrar a correção em formato editorial, por exemplo:
+  - `TABELA 2\nTítulo descritivo`
+  - `Adicionar uma linha própria com Fonte: abaixo do bloco.`
 """

@@ -7,9 +7,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_paragraphs_with_metadata
-from editorial_docx.graph_chat import _agent_scope_indexes, _normalize_batch_comments, _parse_comments
+from editorial_docx.graph_chat import _agent_scope_indexes, _heuristic_reference_comments, _normalize_batch_comments, _parse_comments
 from editorial_docx.models import AgentComment, agent_short_label
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
+from editorial_docx.prompts.schemas import agent_output_contract_text
 
 
 SAMPLE_DOCX = Path(__file__).resolve().parent / "234362_TD_3125_Benefícios coletivos (53 laudas).docx"
@@ -163,6 +164,25 @@ def test_normalize_batch_comments_discards_grammar_comment_on_reference_entry():
     )
 
     assert normalized == []
+
+
+def test_normalize_batch_comments_adds_typography_comment_for_italic_heading():
+    chunks = ["Beneficiários coletivos não identificáveis"]
+    refs = ["parágrafo 1 | tipo=heading | estilo=heading 3 | italico=sim"]
+
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="tipografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].agent == "tipografia"
+    assert normalized[0].paragraph_index == 0
+    assert normalized[0].format_spec == "italic=false"
+    assert "itálico" in normalized[0].message
 
 
 def test_normalize_batch_comments_accepts_objective_grammar_comment_on_caption():
@@ -435,7 +455,8 @@ def test_normalize_batch_comments_discards_table_comment_when_caption_already_ha
         refs=refs,
     )
 
-    assert normalized == []
+    assert all(item.message != "Falta identificador para a tabela." for item in normalized)
+    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
 
 
 def test_normalize_batch_comments_discards_table_comment_with_empty_issue_excerpt():
@@ -592,6 +613,20 @@ def test_normalize_batch_comments_adds_reference_heuristic_for_page_spacing():
     assert any(item.issue_excerpt.startswith("p.77") and item.suggested_fix.startswith("p. 77") for item in normalized)
 
 
+def test_normalize_batch_comments_adds_reference_heuristic_for_missing_terminal_period():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=[
+            "SOUZA, Marcelo L. O território: sobre espaço, poder, autonomia e desenvolvimento. Rio de Janeiro: Bertrand, 1999"
+        ],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert any(item.message == "A referência termina sem ponto final." for item in normalized)
+
+
 def test_normalize_batch_comments_discards_identical_fix():
     comments = [
         AgentComment(
@@ -663,6 +698,49 @@ def test_extract_paragraphs_with_metadata_includes_block_type_and_style(tmp_path
     assert items[1].block_type == "paragraph"
 
 
+def test_extract_paragraphs_with_metadata_includes_inherited_italic_metadata(tmp_path):
+    docx_path = tmp_path / "mini_italic_heading.docx"
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>"""
+    root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    document = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr><w:pStyle w:val="Heading3"/></w:pPr>
+      <w:r><w:t>Subtítulo em itálico</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:styleId="Heading3">
+    <w:name w:val="heading 3"/>
+    <w:rPr><w:i/></w:rPr>
+  </w:style>
+</w:styles>"""
+
+    with ZipFile(docx_path, "w", compression=ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("word/document.xml", document)
+        zf.writestr("word/styles.xml", styles)
+
+    items = extract_paragraphs_with_metadata(docx_path)
+
+    assert items[0].block_type == "heading"
+    assert items[0].is_italic is True
+    assert "italico=sim" in items[0].ref_label
+
+
 def test_extract_paragraphs_with_metadata_keeps_long_body_text_as_paragraph(tmp_path):
     docx_path = tmp_path / "mini_long_body.docx"
     content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -726,12 +804,49 @@ def test_reference_prompt_support_context_loads_local_norms():
     assert "[PREAMBLE:hypersetup]" in support_context
 
 
+def test_reference_prompt_instruction_mentions_explicit_local_diagnosis():
+    instruction = load_agent_instruction("referencias", "td")
+
+    assert "o que está faltando" in instruction
+    assert "onde está o erro" in instruction
+    assert "Referência incompleta" in instruction
+    assert "Há duplicação de local e editora" in instruction
+    assert "A referência online informa a URL" in instruction
+    assert "Inserir \\`Acesso em:\\` com a data de consulta após a URL." in instruction
+
+
+def test_heuristic_reference_comments_flags_missing_access_date():
+    comments = _heuristic_reference_comments(
+        batch_indexes=[0],
+        chunks=[
+            "GONDIM, Grácia M.; MONKEN, Maurício. Território e territorialização. In: GONDIM, Grácia M. M.; CHRISTÓFARO, Maria A. C.; MIYASHIRO, Gladys (org.). Técnico de vigilância em saúde: contexto e identidade. Rio de Janeiro: EPSJV, 2017. p. 21-44. Disponível em: https://www.epsjv.fiocruz.br/sites/default/files/livro1.pdf."
+        ],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert any(item.message == "A referência online informa a URL, mas não traz `Acesso em:` ao final." for item in comments)
+    assert any(item.suggested_fix == "Inserir `Acesso em:` com a data de consulta após a URL." for item in comments)
+
+
+def test_heuristic_reference_comments_flags_duplicated_place_and_publisher():
+    comments = _heuristic_reference_comments(
+        batch_indexes=[0],
+        chunks=["GONDIM, G. M. de M.; MONKEN, M. Territorialização em saúde. Rio de Janeiro: Rio de Janeiro, 2009."],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert any(item.message == "Há duplicação de local e editora no trecho final da referência." for item in comments)
+    assert any(item.issue_excerpt == "Rio de Janeiro: Rio de Janeiro, 2009" for item in comments)
+
+
 def test_typography_prompt_support_context_loads_local_norms():
     support_context = _build_agent_support_context("tipografia")
 
     assert "Times New Roman" in support_context
     assert "texto_referencia" in support_context
     assert "Títulos e subtítulos" in support_context
+    assert "A família de fonte é apenas referência de template" in support_context
+    assert "titulo_3: case=mixed; size_pt=12; bold=true; italic=false" in support_context
 
 
 def test_structure_prompt_support_context_loads_editorial_tasks():
@@ -779,7 +894,7 @@ def test_build_review_note_marks_typography_as_auto_applied():
     assert _build_review_note(item) == "Ajuste tipográfico aplicado automaticamente."
 
 
-def test_build_comment_lines_for_item_omits_category_label():
+def test_build_comment_lines_for_item_includes_message_and_suggested_fix():
     item = AgentComment(
         agent="gramatica_ortografia",
         category="ConcordÃ¢ncia",
@@ -789,7 +904,14 @@ def test_build_comment_lines_for_item_omits_category_label():
 
     lines = _build_comment_lines_for_item(item, ordinal=1)
 
-    assert lines[0] == "1. [gram] Ajustar concordÃ¢ncia verbal."
+    assert lines == ["Ajustar concordÃ¢ncia verbal.", "Correção: vÃªm sendo"]
+
+
+def test_agent_output_contract_requests_diagnosis_and_fix():
+    contract = agent_output_contract_text()
+
+    assert "use `message` para explicar de forma natural e objetiva o que está errado ou faltando no trecho" in contract
+    assert "Use `suggested_fix` para trazer a correção exata do fragmento" in contract
 
 
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():
@@ -814,7 +936,8 @@ def test_normalize_batch_comments_discards_table_source_suggestion_inside_captio
         refs=refs,
     )
 
-    assert normalized == []
+    assert all(item.message != "Adicionar a fonte dos dados utilizados na Tabela 2, conforme o padrão editorial." for item in normalized)
+    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
 
 
 def test_normalize_batch_comments_accepts_safe_typography_auto_apply():
@@ -843,7 +966,7 @@ def test_normalize_batch_comments_accepts_safe_typography_auto_apply():
     )
 
     assert len(normalized) == 1
-    assert normalized[0].auto_apply is True
+    assert normalized[0].auto_apply is False
 
 
 def test_normalize_batch_comments_accepts_safe_structure_auto_apply():
@@ -1078,7 +1201,9 @@ def test_normalize_batch_comments_discards_table_source_claim_when_neighbor_sour
         refs=refs,
     )
 
-    assert normalized == []
+    assert all(item.message != "Identificador do gráfico está correto, mas a fonte não está presente." for item in normalized)
+    assert all(item.message != "O bloco está sem uma linha de fonte ou elaboração logo abaixo da legenda." for item in normalized)
+    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
 
 
 def test_normalize_batch_comments_discards_table_level_claim_from_table_cell():
@@ -1129,6 +1254,44 @@ def test_normalize_batch_comments_discards_source_claim_when_not_anchored_in_cap
     )
 
     assert normalized == []
+
+
+def test_normalize_batch_comments_adds_table_caption_split_heuristic():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="tabelas_figuras",
+        batch_indexes=[0],
+        chunks=["Tabela 2: Decomposição do índice de Gini da renda total familiar per capita"],
+        refs=["parágrafo 1 | tipo=caption"],
+    )
+
+    assert any(item.message == "O identificador e o subtítulo estão fundidos na mesma linha da legenda." for item in normalized)
+    assert any(item.suggested_fix == "TABELA 2\nDecomposição do índice de Gini da renda total familiar per capita" for item in normalized)
+
+
+def test_normalize_batch_comments_adds_table_missing_source_heuristic_when_block_has_no_source_line():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="tabelas_figuras",
+        batch_indexes=[0, 1, 2],
+        chunks=["Tabela 2: Decomposição do índice de Gini", "Tipo de rendimento", "Coeficiente de concentração"],
+        refs=["parágrafo 1 | tipo=caption", "parágrafo 2 | tipo=table_cell", "parágrafo 3 | tipo=table_cell"],
+    )
+
+    assert any(item.message == "O bloco está sem uma linha de fonte ou elaboração logo abaixo da legenda." for item in normalized)
+    assert any(item.suggested_fix == "Adicionar uma linha própria com `Fonte:` ou `Elaboração:` abaixo do bloco." for item in normalized)
+
+
+def test_normalize_batch_comments_does_not_add_table_missing_source_heuristic_when_source_line_exists():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="tabelas_figuras",
+        batch_indexes=[0, 1],
+        chunks=["Gráfico 6: Efeito simulado", "Fonte: Portal Beneficiômetro da Seguridade Social"],
+        refs=["parágrafo 1 | tipo=caption", "parágrafo 2 | tipo=paragraph"],
+    )
+
+    assert all(item.message != "O bloco está sem uma linha de fonte ou elaboração logo abaixo da legenda." for item in normalized)
 
 
 def test_normalize_batch_comments_discards_wrong_style_for_caption():
@@ -1208,7 +1371,7 @@ def test_normalize_batch_comments_discards_grammar_style_rewrite():
     assert normalized == []
 
 
-def test_apply_comments_to_docx_auto_applies_typography_formatting(tmp_path):
+def test_apply_comments_to_docx_does_not_auto_apply_typography_formatting(tmp_path):
     docx_path = tmp_path / "mini_tipografia.docx"
     content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -1261,8 +1424,8 @@ def test_apply_comments_to_docx_auto_applies_typography_formatting(tmp_path):
     with ZipFile(out_path, "r") as zf:
         document_xml = zf.read("word/document.xml").decode("utf-8")
 
-    assert "Times New Roman" in document_xml
-    assert 'w:jc w:val="both"' in document_xml
+    assert "Times New Roman" not in document_xml
+    assert 'w:jc w:val="both"' not in document_xml
 
 
 def test_apply_comments_to_docx_does_not_auto_apply_structure_heading_normalization(tmp_path):
@@ -1441,8 +1604,10 @@ def test_apply_comments_to_docx_consolidates_multiple_comments_on_same_paragraph
 
     assert len(comments) == 1
     assert "Achados consolidados neste trecho:" not in text
-    assert "1. [est]" in text
-    assert "2. [gram]" in text
+    assert "1. [est]" not in text
+    assert "2. [gram]" not in text
+    assert "Parágrafo com dois ajustes." in text
+    assert "Parágrafo com dois ajustes!" in text
     assert "Trecho:" not in text
 
 
@@ -1520,7 +1685,7 @@ def test_agent_scope_indexes_limits_tipografia_to_structured_blocks():
     assert picked == [0, 2, 4]
 
 
-def test_normalize_batch_comments_discards_typography_capitalization_instruction():
+def test_normalize_batch_comments_accepts_typography_capitalization_instruction():
     comments = [
         AgentComment(
             agent="tipografia",
@@ -1530,7 +1695,35 @@ def test_normalize_batch_comments_discards_typography_capitalization_instruction
             issue_excerpt="Introdução",
             suggested_fix="Aplicar negrito e caixa alta.",
             auto_apply=True,
-            format_spec="font=Times New Roman; size_pt=12; bold=true",
+            format_spec="size_pt=12; bold=true; case=upper",
+        )
+    ]
+    chunks = ["Introdução"]
+    refs = ["parágrafo 1 | tipo=heading | estilo=Heading 1"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="tipografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].format_spec == "size_pt=12; bold=true; case=upper"
+
+
+def test_normalize_batch_comments_discards_font_only_typography_instruction():
+    comments = [
+        AgentComment(
+            agent="tipografia",
+            category="heading",
+            message="Ajustar a fonte do título.",
+            paragraph_index=0,
+            issue_excerpt="Introdução",
+            suggested_fix="Aplicar a fonte do template.",
+            auto_apply=True,
+            format_spec="font=Times New Roman",
         )
     ]
     chunks = ["Introdução"]
@@ -1611,6 +1804,209 @@ def test_normalize_batch_comments_discards_references_emphasis_guess():
     chunks = [
         "SHEI, AMIE. Brazil’s conditional cash transfer program associated with declines in infant mortality rates. Health Affairs, v. 32, n. 7, p. 1274-1281, 2013."
     ]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_in_comment_when_in_already_exists():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message='Uso incorreto de "In:". O correto é "In:" seguido do título da obra.',
+            paragraph_index=0,
+            issue_excerpt="In: Jaccoud, L (org). Coordenação e relações intergovernamentais",
+            suggested_fix="In: JACCOUD, L. (Org.). Coordenação e relações intergovernamentais",
+        )
+    ]
+    chunks = [
+        "Jaccoud, Luciana. Coordenação e territórios no Suas: o caso do Paif. In: Jaccoud, L (org). Coordenação e relações intergovernamentais nas políticas sociais brasileiras. Brasília, IPEA, 2020."
+    ]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_volume_guess_when_v_is_absent():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message='Falta de espaço entre "v." e o número do volume.',
+            paragraph_index=0,
+            issue_excerpt="Bulletin of the World Health Organization, 89, 496-503.",
+            suggested_fix="Bulletin of the World Health Organization, v. 89, 496-503.",
+        )
+    ]
+    chunks = ["Bulletin of the World Health Organization, 89, 496-503."]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_point_after_n_false_positive():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message='Falta de ponto após "n." na referência.',
+            paragraph_index=0,
+            issue_excerpt="Texto para Discussão n. 2919",
+            suggested_fix="Texto para Discussão n. 2919.",
+        )
+    ]
+    chunks = ["Jaccoud, Luciana. Seguridade social: por uma análise macrossetorial. Rio de Janeiro: IPEA, Texto para Discussão n. 2919, 2023."]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_n_degree_guess():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message='Uso incorreto de "n." para numeração de textos.',
+            paragraph_index=0,
+            issue_excerpt="Texto para Discussão n. 2919",
+            suggested_fix="Texto para Discussão n° 2919",
+        )
+    ]
+    chunks = ["Jaccoud, Luciana. Seguridade social: por uma análise macrossetorial. Rio de Janeiro: IPEA, Texto para Discussão n. 2919, 2023."]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_colon_spacing_false_positive():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message='Falta de espaço após ":" na descrição do documento.',
+            paragraph_index=0,
+            issue_excerpt="A Theory of Justice. Cambridge: Harvard University Press, 1971",
+            suggested_fix="A Theory of Justice. Cambridge: Harvard University Press, 1971.",
+        )
+    ]
+    chunks = ["Rawls, J. A Theory of Justice. Cambridge: Harvard University Press, 1971"]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert all(item.message != 'Falta de espaço após ":" na descrição do documento.' for item in normalized)
+    assert any(item.message == "A referência termina sem ponto final." for item in normalized)
+
+
+def test_normalize_batch_comments_discards_reference_texto_para_discussao_punctuation_guess():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="Falta de pontuação entre o título e a editora.",
+            paragraph_index=0,
+            issue_excerpt="IPEA, Texto para Discussão (TD) 2941, 2023.",
+            suggested_fix="IPEA: Texto para Discussão (TD) 2941, 2023.",
+        )
+    ]
+    chunks = ["ANSILIERO, Gabriela et al. Beneficiômetro da seguridade social: um panorama da previdência social brasileira a partir de indicadores clássicos. IPEA, Texto para Discussão (TD) 2941, 2023."]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_point_after_number_false_positive():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="Inserir ponto final após o número.",
+            paragraph_index=0,
+            issue_excerpt="n. 11,",
+            suggested_fix="n. 11.",
+        )
+    ]
+    chunks = ["ZAVASCKI, Teori Albino. Defesa de direitos coletivos e defesa coletiva de direitos. Revista da Faculdade de Direito da UFRGS, n. 11,"]
+    refs = ["parágrafo 1 | tipo=reference_entry"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_false_positive_about_terminal_period():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="Falta pontuação final na referência.",
+            paragraph_index=0,
+            issue_excerpt="Rio de Janeiro: Bertrand, 1999.",
+            suggested_fix="Rio de Janeiro: Bertrand, 1999.",
+        )
+    ]
+    chunks = ["SOUZA, Marcelo L. O território. Rio de Janeiro: Bertrand, 1999."]
     refs = ["parágrafo 1 | tipo=reference_entry"]
 
     normalized = _normalize_batch_comments(
@@ -2019,6 +2415,6 @@ def test_apply_comments_to_docx_applies_auto_fix_silently_without_comment(tmp_pa
         document_xml = zf.read("word/document.xml").decode("utf-8")
         comments_xml = zf.read("word/comments.xml").decode("utf-8")
 
-    assert "Times New Roman" in document_xml
-    assert "<w:comment " not in comments_xml
+    assert "Times New Roman" not in document_xml
+    assert "<w:comment " in comments_xml
 

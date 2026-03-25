@@ -12,6 +12,7 @@ Restrições:
 - não inventar numeração de parágrafos, títulos ou subtítulos que o documento não adota;
 - não exigir subseções apenas porque uma seção é extensa, enumera exemplos ou apresenta classificações;
 - só comentar hierarquia quebrada quando houver evidência objetiva no próprio documento: salto de numeração, nível incompatível, duplicação, ausência explícita em sequência ou título claramente malformado;
+- comentar também inconsistências locais e objetivas entre títulos do mesmo nível, como presença ou ausência de numeração, forma gráfica do prefixo numérico e paralelismo formal evidente;
 - escrever `message` de forma local e objetiva, sem citar "parágrafo X" ou comparar com trechos distantes pelo índice;
 - em `suggested_fix`, trazer apenas o título corrigido, nunca uma instrução longa do tipo "alterar a numeração..." ou "por exemplo...";
 - não tratar citação direta, item de lista, célula de tabela, legenda ou referência bibliográfica como seção;
@@ -44,6 +45,8 @@ Restrições:
 - não inventar numeração de parágrafos, títulos ou subtítulos que o documento não adota;
 - não exigir subseções apenas porque uma seção é extensa, enumera exemplos ou apresenta classificações;
 - só comentar hierarquia quebrada quando houver evidência objetiva no próprio documento: salto de numeração, nível incompatível, duplicação, ausência explícita em sequência ou título claramente malformado;
+- comentar também inconsistências objetivas entre títulos do mesmo nível, como mistura entre itens numerados e não numerados, variação injustificada da forma numérica e falta de paralelismo formal entre seções equivalentes;
+- pode cobrar consistência em títulos finais recorrentes do corpo, como `Considerações finais`, `Conclusão`, `Conclusões` e `Referências`, quando a própria hierarquia do documento indicar esse padrão;
 - escrever `message` de forma local e objetiva, sem citar "parágrafo X" ou comparar com trechos distantes pelo índice;
 - em `suggested_fix`, trazer apenas o título corrigido, nunca uma instrução longa do tipo "alterar a numeração..." ou "por exemplo...";
 - não sugerir numerar parágrafos do corpo do texto;

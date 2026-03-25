@@ -132,17 +132,18 @@ def _build_tasks_context(agent_name: str) -> str:
 def _load_typography_support_context() -> str:
     snippets = [
         "[TUTORIAL:tipografia]",
-        "- titulo_publicacao: font=Times New Roman; size_pt=14; bold=true; align=center; space_before_pt=6; space_after_pt=54; line_spacing=1.0; left_indent_pt=0",
-        "- texto: font=Times New Roman; size_pt=12; bold=false; italic=false; align=justify; space_before_pt=0; space_after_pt=6; line_spacing=1.5; left_indent_pt=0",
-        "- nota_rodape: font=Times New Roman; size_pt=10; bold=false; italic=false; align=justify; space_before_pt=0; space_after_pt=4; line_spacing=1.0; left_indent_pt=0",
-        "- titulo_1: font=Times New Roman; size_pt=12; bold=true; align=justify; space_before_pt=18; space_after_pt=6; line_spacing=1.0; left_indent_pt=35.4",
-        "- titulo_2: font=Times New Roman; size_pt=12; bold=true; align=justify; space_before_pt=18; space_after_pt=6; line_spacing=1.0; left_indent_pt=35.4",
-        "- titulo_3: font=Times New Roman; size_pt=12; bold=true; align=justify; space_before_pt=18; space_after_pt=6; line_spacing=1.0; left_indent_pt=35.4",
-        "- titulo_tabela_grafico: font=Times New Roman; size_pt=12; bold=false; align=justify; space_before_pt=18; space_after_pt=2; line_spacing=1.0; left_indent_pt=0",
-        "- subtitulo_tabela_grafico: font=Times New Roman; size_pt=12; bold=true; align=justify; space_before_pt=0; space_after_pt=6; line_spacing=1.0; left_indent_pt=0",
-        "- texto_tabela: font=Times New Roman; size_pt=11; bold=false; align=left; space_before_pt=0; space_after_pt=0; line_spacing=1.0; left_indent_pt=0",
-        "- fonte_tabela_grafico: font=Times New Roman; size_pt=10; bold=false; align=justify; space_before_pt=2; space_after_pt=12; line_spacing=1.0; left_indent_pt=0",
-        "- texto_referencia: font=Times New Roman; size_pt=12; bold=false; align=justify; space_before_pt=0; space_after_pt=6; line_spacing=1.5; left_indent_pt=0",
+        "A família de fonte é apenas referência de template e não deve gerar comentário por si só.",
+        "- titulo_publicacao: case=upper; size_pt=14; bold=true; italic=false; align=center; space_before_pt=6; space_after_pt=54; line_spacing=1.0; left_indent_pt=0",
+        "- texto: case=mixed; size_pt=12; bold=false; italic=false; align=justify; space_before_pt=0; space_after_pt=6; line_spacing=1.5; left_indent_pt=0",
+        "- nota_rodape: case=mixed; size_pt=10; bold=false; italic=false; align=justify; space_before_pt=0; space_after_pt=4; line_spacing=1.0; left_indent_pt=0",
+        "- titulo_1: case=upper; size_pt=12; bold=true; italic=false; align=justify; space_before_pt=18; space_after_pt=6; line_spacing=1.0; left_indent_pt=35.4",
+        "- titulo_2: case=mixed; size_pt=12; bold=true; italic=false; align=justify; space_before_pt=18; space_after_pt=6; line_spacing=1.0; left_indent_pt=35.4",
+        "- titulo_3: case=mixed; size_pt=12; bold=true; italic=false; align=justify; space_before_pt=18; space_after_pt=6; line_spacing=1.0; left_indent_pt=35.4",
+        "- titulo_tabela_grafico: case=upper; size_pt=12; bold=false; italic=false; align=justify; space_before_pt=18; space_after_pt=2; line_spacing=1.0; left_indent_pt=0",
+        "- subtitulo_tabela_grafico: case=mixed; size_pt=12; bold=true; italic=false; align=justify; space_before_pt=0; space_after_pt=6; line_spacing=1.0; left_indent_pt=0",
+        "- texto_tabela: case=mixed; size_pt=11; bold=false; italic=false; align=left; space_before_pt=0; space_after_pt=0; line_spacing=1.0; left_indent_pt=0",
+        "- fonte_tabela_grafico: case=mixed; size_pt=10; bold=false; italic=false; align=justify; space_before_pt=2; space_after_pt=12; line_spacing=1.0; left_indent_pt=0",
+        "- texto_referencia: case=mixed; size_pt=12; bold=false; italic=false; align=justify; space_before_pt=0; space_after_pt=6; line_spacing=1.5; left_indent_pt=0",
     ]
 
     cls_path = AUX_UTILIDADES_DIR / "td.cls"
@@ -153,7 +154,7 @@ def _load_typography_support_context() -> str:
                 [
                     "",
                     "[TD-CLS:fontes]",
-                    "O template TD define Times New Roman como fonte principal.",
+                    "O template TD define Times New Roman como fonte principal, mas a família de fonte não deve gerar comentário por si só.",
                 ]
             )
     return "\n".join(snippets)
@@ -213,6 +214,11 @@ def build_agent_prompt(agent_name: str, profile_key: str | None = None) -> ChatP
                 (
                     "Perfil do documento: {profile_description}\n"
                     "Instrução de perfil: {profile_instruction}\n\n"
+                    "Estilo dos comentários:\n"
+                    "- em `message`, explique de forma natural e objetiva o que está errado ou faltando no trecho;\n"
+                    "- em `message`, cite o problema local, não apenas um rótulo genérico;\n"
+                    "- em `suggested_fix`, traga a correção exata do fragmento ou uma instrução curta e concreta;\n"
+                    "- não use mensagens vagas como `ajustar trecho`, `corrigir problema` ou `normalizar item`;\n\n"
                     "Cada linha do trecho vem no formato [indice_global] (referência | tipo=...). "
                     "Se preencher paragraph_index, use exatamente o número entre colchetes [N] daquela linha; "
                     "nunca use a posição do item no lote.\n"

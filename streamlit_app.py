@@ -127,8 +127,6 @@ for key, default in {
 def _build_rows() -> list[dict]:
     rows = []
     for comment_idx, c in enumerate(st.session_state.comments):
-        if c.agent == "tipografia" and c.auto_apply:
-            continue
         ref = "sem referência"
         if isinstance(c.paragraph_index, int) and 0 <= c.paragraph_index < len(st.session_state.refs):
             ref = st.session_state.refs[c.paragraph_index]

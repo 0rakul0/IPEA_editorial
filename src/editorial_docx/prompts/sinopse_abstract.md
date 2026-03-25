@@ -11,6 +11,7 @@ Restrições:
 - não inferir problema de formatação, alinhamento, negrito, itálico, recuo ou número de parágrafos a partir de texto simples sem evidência explícita;
 - não dizer que frases não terminam com pontuação, que não começam com maiúscula ou que extrapolam limite de palavras sem confirmar isso no próprio trecho;
 - não afirmar que o abstract “não reflete” a sinopse por diferença de ênfase, detalhe ou formulação; só comentar quando houver contradição, omissão textual inequívoca ou repetição evidente;
+- pode comentar repetição literal evidente, redundância curta muito marcada e desalinhamento objetivo entre palavras-chave e keywords quando o trecho mostrar isso de forma inequívoca;
 - não comentar parágrafo analítico do corpo do texto só porque parece resumo;
 - se o trecho estiver formalmente correto e não houver inconsistência textual clara, responder [];
 - se o trecho não pertencer claramente a essas seções, responder [].
@@ -39,6 +40,7 @@ Restrições:
 - não inferir problema de formatação, alinhamento, negrito, itálico, recuo ou número de parágrafos a partir de texto simples sem evidência explícita;
 - não afirmar que há excesso de palavras, falta de pontuação final, falta de maiúscula inicial ou quebra indevida de parágrafo sem conferência direta do próprio trecho;
 - não afirmar que o abstract “não reflete” a sinopse por diferença de ênfase, detalhe ou formulação; só comentar quando houver contradição, omissão textual inequívoca ou repetição evidente;
+- pode comentar repetição literal evidente, redundância curta muito marcada e desalinhamento objetivo entre palavras-chave e keywords quando o trecho mostrar isso de forma inequívoca;
 - não tratar repetição legítima de JEL em português e inglês como erro quando o template exigir as duas ocorrências;
 - se palavras-chave/keywords parecerem semanticamente adequadas e a única crítica possível for preferencial ou subjetiva, responder [];
 - não comentar parágrafo analítico do corpo do texto só porque parece resumo;

@@ -29,6 +29,16 @@ class ExtractedParagraph:
     block_type: str
     style_name: str = ""
     has_numbering: bool = False
+    is_bold: bool = False
+    is_italic: bool = False
+
+
+@dataclass(slots=True)
+class _StyleMeta:
+    name: str = ""
+    based_on: str = ""
+    bold: bool | None = None
+    italic: bool | None = None
 
 
 def _qname(ns: str, tag: str) -> str:
@@ -175,12 +185,100 @@ def _load_style_map(parts: dict[str, bytes]) -> dict[str, str]:
     return style_map
 
 
+def _parse_on_off(element: etree._Element | None) -> bool | None:
+    if element is None:
+        return None
+    value = element.get(_qname(W_NS, "val"))
+    if value is None:
+        return True
+    value = value.strip().lower()
+    if value in {"0", "false", "off", "no"}:
+        return False
+    if value in {"1", "true", "on", "yes"}:
+        return True
+    return True
+
+
+def _load_style_meta(parts: dict[str, bytes]) -> dict[str, _StyleMeta]:
+    raw = parts.get("word/styles.xml")
+    if raw is None:
+        return {}
+
+    root = _parse_xml(raw)
+    style_meta: dict[str, _StyleMeta] = {}
+    for style in root.findall(".//w:style", namespaces=NS):
+        style_id = style.get(_qname(W_NS, "styleId")) or ""
+        if not style_id:
+            continue
+        name = style.find("w:name", namespaces=NS)
+        based_on = style.find("w:basedOn", namespaces=NS)
+        rpr = style.find("w:rPr", namespaces=NS)
+        style_meta[style_id] = _StyleMeta(
+            name=name.get(_qname(W_NS, "val"), "") if name is not None else "",
+            based_on=based_on.get(_qname(W_NS, "val"), "") if based_on is not None else "",
+            bold=_parse_on_off(rpr.find("w:b", namespaces=NS) if rpr is not None else None),
+            italic=_parse_on_off(rpr.find("w:i", namespaces=NS) if rpr is not None else None),
+        )
+    return style_meta
+
+
 def _paragraph_style_name(paragraph: etree._Element, style_map: dict[str, str]) -> str:
     style = paragraph.find("./w:pPr/w:pStyle", namespaces=NS)
     if style is None:
         return ""
     style_id = style.get(_qname(W_NS, "val"), "")
     return style_map.get(style_id, style_id)
+
+
+def _paragraph_style_id(paragraph: etree._Element) -> str:
+    style = paragraph.find("./w:pPr/w:pStyle", namespaces=NS)
+    if style is None:
+        return ""
+    return style.get(_qname(W_NS, "val"), "")
+
+
+def _resolve_style_flag(
+    style_id: str,
+    style_meta: dict[str, _StyleMeta],
+    attr: str,
+    seen: set[str] | None = None,
+) -> bool | None:
+    if not style_id:
+        return None
+    if seen is None:
+        seen = set()
+    if style_id in seen:
+        return None
+    seen.add(style_id)
+    meta = style_meta.get(style_id)
+    if meta is None:
+        return None
+    value = getattr(meta, attr)
+    if value is not None:
+        return value
+    if meta.based_on:
+        return _resolve_style_flag(meta.based_on, style_meta, attr, seen)
+    return None
+
+
+def _paragraph_emphasis(paragraph: etree._Element, style_meta: dict[str, _StyleMeta]) -> tuple[bool, bool]:
+    style_id = _paragraph_style_id(paragraph)
+    default_bold = _resolve_style_flag(style_id, style_meta, "bold")
+    default_italic = _resolve_style_flag(style_id, style_meta, "italic")
+    runs = [run for run in paragraph.findall("w:r", namespaces=NS) if _run_text(run).strip()]
+    if not runs:
+        return bool(default_bold), bool(default_italic)
+
+    effective_bold: list[bool] = []
+    effective_italic: list[bool] = []
+    for run in runs:
+        rpr = run.find("w:rPr", namespaces=NS)
+        run_bold = _parse_on_off(rpr.find("w:b", namespaces=NS) if rpr is not None else None)
+        run_italic = _parse_on_off(rpr.find("w:i", namespaces=NS) if rpr is not None else None)
+        effective_bold.append(default_bold if run_bold is None else run_bold)
+        effective_italic.append(default_italic if run_italic is None else run_italic)
+
+    return all(bool(value) for value in effective_bold), all(bool(value) for value in effective_italic)
 
 
 def _paragraph_has_numbering(paragraph: etree._Element) -> bool:
@@ -460,6 +558,10 @@ def _refine_contextual_block_types(items: list[ExtractedParagraph]) -> list[Extr
             ref_bits.append(f"estilo={item.style_name}")
         if item.has_numbering:
             ref_bits.append("numerado=sim")
+        if item.is_bold:
+            ref_bits.append("negrito=sim")
+        if item.is_italic:
+            ref_bits.append("italico=sim")
         refined.append(
             ExtractedParagraph(
                 text=item.text,
@@ -467,6 +569,8 @@ def _refine_contextual_block_types(items: list[ExtractedParagraph]) -> list[Extr
                 block_type=block_types[idx - 1],
                 style_name=item.style_name,
                 has_numbering=item.has_numbering,
+                is_bold=item.is_bold,
+                is_italic=item.is_italic,
             )
         )
     return refined
@@ -477,6 +581,7 @@ def extract_paragraphs_with_metadata(input_path: Path) -> list[ExtractedParagrap
         parts = {name: zin.read(name) for name in zin.namelist()}
 
     style_map = _load_style_map(parts)
+    style_meta = _load_style_meta(parts)
     document_root = _parse_xml(parts["word/document.xml"])
     paragraphs = document_root.findall(".//w:p", namespaces=NS)
 
@@ -487,6 +592,7 @@ def extract_paragraphs_with_metadata(input_path: Path) -> list[ExtractedParagrap
 
     for visible_index, (paragraph, text) in enumerate(visible_paragraphs, start=1):
         style_name = _paragraph_style_name(paragraph, style_map)
+        is_bold, is_italic = _paragraph_emphasis(paragraph, style_meta)
         previous_text = visible_paragraphs[visible_index - 2][1] if visible_index - 2 >= 0 else ""
         next_text = visible_paragraphs[visible_index][1] if visible_index < total_visible else ""
         block_type = _classify_paragraph(
@@ -505,6 +611,8 @@ def extract_paragraphs_with_metadata(input_path: Path) -> list[ExtractedParagrap
                 block_type=block_type,
                 style_name=style_name,
                 has_numbering=_paragraph_has_numbering(paragraph),
+                is_bold=is_bold,
+                is_italic=is_italic,
             )
         )
     return _refine_contextual_block_types(items)
@@ -907,12 +1015,8 @@ def _apply_auto_formatting(paragraphs: list[etree._Element], non_empty_indexes: 
         paragraph_index = item.paragraph_index
         if paragraph_index is None or not (0 <= paragraph_index < len(non_empty_indexes)):
             continue
-        paragraph = paragraphs[non_empty_indexes[paragraph_index]]
         if item.agent == "tipografia" and item.auto_apply:
-            spec = _parse_format_spec(item.format_spec)
-            if not spec:
-                continue
-            _apply_paragraph_formatting(paragraph, spec)
+            continue
 
 
 def _resolve_docx_paragraph_index(item: AgentComment, non_empty_indexes: list[int]) -> int | None:
@@ -925,14 +1029,14 @@ def _resolve_docx_paragraph_index(item: AgentComment, non_empty_indexes: list[in
 
 
 def _build_comment_lines_for_item(item: AgentComment, ordinal: int) -> list[str]:
-    lines = [f"{ordinal}. [{agent_short_label(item.agent)}] {item.message}"]
-    if item.suggested_fix:
-        lines.append(f"Sugestão: {item.suggested_fix}")
-    review_note = _build_review_note(item)
-    if review_note:
-        lines.append(review_note)
-    if item.reviewer_note:
-        lines.append(f"Observação: {item.reviewer_note}")
+    message = (item.message or "").strip()
+    suggestion = (item.suggested_fix or "").strip()
+
+    lines: list[str] = []
+    if message:
+        lines.append(message)
+    if suggestion:
+        lines.append(f"Correção: {suggestion}")
     return lines
 
 
@@ -992,7 +1096,7 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
     paragraphs = document_root.findall(".//w:p", namespaces=NS)
     non_empty_indexes = [i for i, p in enumerate(paragraphs) if _paragraph_text(p).strip()]
     _apply_auto_formatting(paragraphs, non_empty_indexes, comments)
-    visible_comments = [item for item in comments if not (item.agent == "tipografia" and item.auto_apply)]
+    visible_comments = comments[:]
 
     grouped_comments: dict[int, list[AgentComment]] = {}
     for item in visible_comments:

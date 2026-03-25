@@ -35,6 +35,9 @@ def agent_output_contract_text() -> str:
     return (
         "Você DEVE responder APENAS com um JSON válido, sem markdown, sem explicação extra e sem cercas de código. "
         "Se não houver achados no trecho analisado, responda com uma lista vazia: []. "
+        "Em cada item, use `message` para explicar de forma natural e objetiva o que está errado ou faltando no trecho. "
+        "Use `suggested_fix` para trazer a correção exata do fragmento ou uma instrução curta e concreta de ajuste. "
+        "Evite mensagens genéricas como `ajustar trecho` ou `corrigir problema`. "
         "Siga este JSON Schema: "
         f"{json.dumps(schema, ensure_ascii=False)}"
     )

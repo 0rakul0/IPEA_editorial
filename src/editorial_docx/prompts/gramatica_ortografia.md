@@ -17,6 +17,8 @@ Restrições:
 - não comentar trecho entre aspas, citação direta ou transcrição normativa;
 - não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
 - priorizar erros objetivos e locais, como flexão nominal/verbal, acentuação, grafia e pontuação estritamente obrigatória;
+- pode comentar também erro local e verificável de crase, regência e paralelismo sintático curto, desde que a correção recaia só sobre o fragmento afetado;
+- pode apontar construção truncada ou combinação lexical flagrantemente errada quando o problema estiver materializado em poucas palavras e a correção não exigir reescrever a frase inteira;
 - capturar também erros curtos e claros de concordância, inclusive em sintagmas nominais como plural + adjetivo no singular e em sujeito composto com verbo no singular;
 - em correções de concordância, preservar o mesmo verbo ou nome do original, alterando apenas a flexão estritamente necessária;
 - não substituir um verbo por outro de sentido diferente para “corrigir” concordância;
@@ -47,6 +49,8 @@ Restrições:
 - não comentar trecho entre aspas, citação direta ou transcrição normativa;
 - não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
 - priorizar erros objetivos e locais, como flexão nominal/verbal, acentuação, grafia e pontuação estritamente obrigatória;
+- pode comentar também erro local e verificável de crase, regência e paralelismo sintático curto, desde que a correção recaia só sobre o fragmento afetado;
+- pode apontar construção truncada ou combinação lexical flagrantemente errada quando o problema estiver materializado em poucas palavras e a correção não exigir reescrever a frase inteira;
 - capturar também erros curtos e claros de concordância, inclusive em sintagmas nominais como plural + adjetivo no singular e em sujeito composto com verbo no singular;
 - em correções de concordância, preservar o mesmo verbo ou nome do original, alterando apenas a flexão estritamente necessária;
 - não substituir um verbo por outro de sentido diferente para “corrigir” concordância;
