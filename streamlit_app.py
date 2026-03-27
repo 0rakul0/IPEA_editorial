@@ -15,7 +15,7 @@ import streamlit as st
 from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document
 from src.editorial_docx.graph_chat import run_conversation
-from src.editorial_docx.llm import get_llm_config
+from src.editorial_docx.llm import get_llm_config, get_llm_model_tag
 from src.editorial_docx.models import AgentComment, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
@@ -37,6 +37,7 @@ env_path = project_root / ".env"
 
 with st.sidebar:
     llm_config = get_llm_config()
+    llm_model_tag = get_llm_model_tag(llm_config)
     st.markdown("### LLM")
     st.caption(
         f"Provider: `{llm_config['provider']}` | Modelo: `{llm_config['model']}`"
@@ -596,14 +597,14 @@ with col_chat:
             st.download_button(
                 label="Baixar DOCX comentado",
                 data=output_bytes,
-                file_name=f"{Path(st.session_state.doc_path).stem}_output.docx",
+                file_name=f"{Path(st.session_state.doc_path).stem}_output_{llm_model_tag}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
         st.download_button(
             label="Baixar relatório de correções (JSON)",
             data=json.dumps(report, ensure_ascii=False, indent=2),
-            file_name=f"{Path(st.session_state.doc_path).stem if st.session_state.doc_path else 'correcoes'}.relatorio.json",
+            file_name=f"{Path(st.session_state.doc_path).stem if st.session_state.doc_path else 'correcoes'}_output_{llm_model_tag}.relatorio.json",
             mime="application/json",
         )
     elif st.session_state.comments:
@@ -615,7 +616,7 @@ with col_chat:
             st.download_button(
                 label="Baixar DOCX com ajustes automáticos",
                 data=output_bytes,
-                file_name=f"{Path(st.session_state.doc_path).stem}_output.docx",
+                file_name=f"{Path(st.session_state.doc_path).stem}_output_{llm_model_tag}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 

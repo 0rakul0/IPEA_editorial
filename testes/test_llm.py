@@ -1,4 +1,4 @@
-from editorial_docx.llm import get_llm_config
+from editorial_docx.llm import get_llm_config, get_llm_model_tag
 
 
 def _clear_llm_env(monkeypatch):
@@ -54,3 +54,11 @@ def test_get_llm_config_uses_openai_compatible_settings(monkeypatch):
     assert config["base_url"] == "http://interna/v1"
     assert config["model"] == "modelo-interno"
     assert config["api_key"] == ""
+
+
+def test_get_llm_model_tag_normalizes_openai_model_name():
+    assert get_llm_model_tag({"model": "gpt-4o-mini"}) == "gpt4o_mini"
+
+
+def test_get_llm_model_tag_normalizes_ollama_model_name():
+    assert get_llm_model_tag({"model": "qwen3:14b"}) == "qwen3_14b"

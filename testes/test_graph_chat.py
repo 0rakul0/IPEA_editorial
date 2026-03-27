@@ -1323,7 +1323,7 @@ def test_normalize_batch_comments_adds_reference_global_comment_for_uncited_entr
     normalized = _normalize_batch_comments(
         comments=[],
         agent="referencias",
-        batch_indexes=[2, 3],
+        batch_indexes=[1, 2, 3],
         chunks=[
             "Segundo Silva (2020), a política produziu efeitos coletivos relevantes.",
             "Referências",
@@ -1338,14 +1338,15 @@ def test_normalize_batch_comments_adds_reference_global_comment_for_uncited_entr
         ],
     )
 
-    assert any(item.message == "Esta referência não foi localizada nas citações do corpo do texto." and item.paragraph_index == 3 for item in normalized)
+    assert any(item.message == "Há referências na lista que não foram localizadas nas citações do corpo do texto." and item.paragraph_index == 1 for item in normalized)
+    assert any("SOUZA (2021)" in item.suggested_fix for item in normalized)
 
 
 def test_normalize_batch_comments_adds_reference_global_comment_for_citation_missing_from_reference_list():
     normalized = _normalize_batch_comments(
         comments=[],
         agent="referencias",
-        batch_indexes=[2],
+        batch_indexes=[0, 1, 2],
         chunks=[
             "Segundo Silva (2020), a política produziu efeitos coletivos relevantes.",
             "Referências",
@@ -1358,7 +1359,124 @@ def test_normalize_batch_comments_adds_reference_global_comment_for_citation_mis
         ],
     )
 
-    assert any("Há uma citação no corpo do texto sem correspondência clara na lista de referências" in item.message and item.paragraph_index == 1 for item in normalized)
+    assert any("Há citações no corpo do texto sem correspondência clara na lista de referências." == item.message and item.paragraph_index == 1 for item in normalized)
+    assert any("silva (2020)" in item.suggested_fix.casefold() for item in normalized)
+    assert any(item.category == "citation_match" and item.paragraph_index == 0 for item in normalized)
+    assert any(item.issue_excerpt == "Silva (2020)" for item in normalized)
+
+
+def test_normalize_batch_comments_does_not_repeat_reference_global_comment_outside_heading_batch():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=[
+            "Segundo Silva (2020), a política produziu efeitos coletivos relevantes.",
+            "Referências",
+            "SOUZA, Maria. Benefícios coletivos. São Paulo: Editora Y, 2021.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all(item.paragraph_index != 1 for item in normalized)
+    assert any(item.category == "citation_match" and item.paragraph_index == 0 for item in normalized)
+
+
+def test_agent_scope_indexes_for_references_includes_body_citation_paragraphs():
+    indexes = _agent_scope_indexes(
+        "referencias",
+        chunks=[
+            "Segundo Silva (2020), a política produziu efeitos coletivos relevantes.",
+            "Texto sem citação.",
+            "Referências",
+            "SILVA, João. Política social no Brasil. Rio de Janeiro: Editora X, 2020.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=paragraph",
+            "parágrafo 3 | tipo=reference_heading",
+            "parágrafo 4 | tipo=reference_entry",
+        ],
+        sections=[],
+    )
+
+    assert 0 in indexes
+    assert 2 in indexes
+    assert 3 in indexes
+
+
+def test_normalize_batch_comments_ignores_law_year_as_bibliographic_citation():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "Nos termos da Lei nº 7.347, de 1985, a tutela coletiva possui disciplina própria.",
+            "Referências",
+            "SILVA, João. Política social no Brasil. Rio de Janeiro: Editora X, 2020.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all(item.category != "citation_match" for item in normalized)
+
+
+def test_normalize_batch_comments_matches_first_reference_when_two_entries_are_glued():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "Segundo Deslandes (2006), a humanização dos cuidados exige revisão crítica.",
+            "Referências",
+            "DESLANDES, Suely. Humanização: revisitando o conceito a partir das contribuições da sociologia médica. In: DESLANDES, S. F. et al. Humanização dos cuidados em saúde: conceitos, dilemas e práticas. Rio de Janeiro: Fiocruz, p. 33-47, 2006. DURKHEIM, E. Da divisão do trabalho social. São Paulo: Martins Fontes, 1999.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all(
+        not (
+            item.category == "citation_match"
+            and item.issue_excerpt == "Deslandes (2006)"
+        )
+        for item in normalized
+    )
+
+
+def test_normalize_batch_comments_adds_reference_citation_format_comment_for_missing_space():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[1],
+        chunks=[
+            "Texto de abertura.",
+            "Segundo Mation(2025), a política produziu efeitos distributivos.",
+            "Referências",
+            "MATION, Lucas. Política distributiva. Brasília: Ipea, 2025.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=paragraph",
+            "parágrafo 3 | tipo=reference_heading",
+            "parágrafo 4 | tipo=reference_entry",
+        ],
+    )
+
+    assert any(item.category == "citation_format" for item in normalized)
+    assert any(item.issue_excerpt == "Mation(2025)" for item in normalized)
+    assert any(item.suggested_fix == "Mation (2025)" for item in normalized)
 
 
 def test_normalize_batch_comments_discards_wrong_style_for_caption():

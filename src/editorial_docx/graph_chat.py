@@ -618,35 +618,64 @@ def _heuristic_reference_comments(batch_indexes: list[int], chunks: list[str], r
     return comments
 
 
-def _reference_body_citation_keys(chunks: list[str], refs: list[str]) -> set[tuple[str, str]]:
-    keys: set[tuple[str, str]] = set()
+def _reference_citation_key(author_raw: str, year_raw: str) -> tuple[str, str] | None:
+    author = _ascii_fold((author_raw or "").strip()).casefold()
+    year = (year_raw or "").strip().casefold()
+    if not author or not year:
+        return None
+    author = re.split(r"\s+(?:et\s+al\.?|e|and|&)\b", author, maxsplit=1)[0].strip()
+    tokens = re.findall(r"[a-z0-9]+", author)
+    if not tokens:
+        return None
+    if tokens[0] in {"de", "da", "do", "das", "dos", "e", "and", "et"}:
+        return None
+    return tokens[0], year
 
-    def add_key(author_raw: str, year_raw: str) -> None:
-        author = _ascii_fold((author_raw or "").strip()).casefold()
-        year = (year_raw or "").strip().casefold()
-        if not author or not year:
-            return
-        author = re.split(r"\s+(?:et\s+al\.?|e|and|&)\b", author, maxsplit=1)[0].strip()
-        tokens = re.findall(r"[a-z0-9]+", author)
-        if not tokens:
-            return
-        keys.add((tokens[0], year))
 
-    for chunk, ref in zip(chunks, refs):
+def _reference_citation_label(author_raw: str, year_raw: str) -> str:
+    author = re.split(r"\s+(?:et\s+al\.?|e|and|&)\b", (author_raw or "").strip(), maxsplit=1)[0].strip()
+    if not author:
+        author = (author_raw or "").strip()
+    return f"{author} ({(year_raw or '').strip()})".strip()
+
+
+def _reference_body_citation_mentions(
+    chunks: list[str], refs: list[str], body_limit: int
+) -> list[tuple[int, str, tuple[str, str], str]]:
+    mentions: list[tuple[int, str, tuple[str, str], str]] = []
+    seen: set[tuple[int, str, tuple[str, str], str]] = set()
+
+    def add_mention(idx: int, excerpt: str, author_raw: str, year_raw: str) -> None:
+        key = _reference_citation_key(author_raw, year_raw)
+        if key is None:
+            return
+        display = _reference_citation_label(author_raw, year_raw)
+        mention = (idx, (excerpt or "").strip(), key, display)
+        if mention in seen:
+            return
+        seen.add(mention)
+        mentions.append(mention)
+
+    for idx, (chunk, ref) in enumerate(zip(chunks[:body_limit], refs[:body_limit])):
         if _ref_block_type(ref) in {"reference_entry", "reference_heading", "caption", "table_cell"}:
             continue
         text = chunk or ""
 
-        for author, year in re.findall(r"([A-ZÀ-Ý][A-Za-zÀ-ÿ'’`\-]+(?:\s+et\s+al\.?)?)\s*\((\d{4}[a-z]?)\)", text):
-            add_key(author, year)
+        for match in re.finditer(r"\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’`\-]+(?:\s+et\s+al\.?)?)\s*\((\d{4}[a-z]?)\)", text):
+            add_mention(idx, match.group(0), match.group(1), match.group(2))
 
-        for parenthetical in re.findall(r"\(([^)]*\d{4}[a-z]?[^)]*)\)", text):
-            for segment in re.split(r";", parenthetical):
-                match = re.search(r"([A-ZÀ-Ý][A-Za-zÀ-ÿ'’`\-]+)(?:[^0-9()]*)[, ]\s*(\d{4}[a-z]?)", segment.strip())
+        for parenthetical_match in re.finditer(r"\(([^)]*\d{4}[a-z]?[^)]*)\)", text):
+            for segment in re.split(r";", parenthetical_match.group(1)):
+                piece = segment.strip()
+                match = re.search(r"([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’`\-]+)(?:[^0-9()]*)[, ]\s*(\d{4}[a-z]?)", piece)
                 if match:
-                    add_key(match.group(1), match.group(2))
+                    add_mention(idx, piece, match.group(1), match.group(2))
 
-    return keys
+    return mentions
+
+
+def _reference_body_citation_keys(chunks: list[str], refs: list[str], body_limit: int) -> set[tuple[str, str]]:
+    return {key for _, _, key, _ in _reference_body_citation_mentions(chunks, refs, body_limit)}
 
 
 def _reference_entry_key(text: str) -> tuple[str, str] | None:
@@ -656,7 +685,7 @@ def _reference_entry_key(text: str) -> tuple[str, str] | None:
     year_matches = re.findall(r"\b(?:19|20)\d{2}[a-z]?\b", source, flags=re.IGNORECASE)
     if not year_matches:
         return None
-    year = year_matches[-1].casefold()
+    year = year_matches[0].casefold()
 
     if "," in source:
         author_part = source.split(",", 1)[0]
@@ -672,52 +701,133 @@ def _reference_entry_key(text: str) -> tuple[str, str] | None:
     return tokens[0], year
 
 
-def _heuristic_reference_global_comments(chunks: list[str], refs: list[str]) -> list[AgentComment]:
-    citation_keys = _reference_body_citation_keys(chunks, refs)
-    if not citation_keys:
-        return []
+def _reference_entry_label(text: str) -> str:
+    source = (text or "").strip()
+    if not source:
+        return ""
+    key = _reference_entry_key(source)
+    if key is None:
+        return source[:80]
+    author_raw = source.split(",", 1)[0].strip() if "," in source else source.split(".", 1)[0].strip()
+    return f"{author_raw} ({key[1]})"
 
+
+def _summarize_reference_labels(labels: list[str], max_items: int = 6) -> str:
+    cleaned = [label.strip() for label in labels if label.strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_items:
+        return "; ".join(cleaned)
+    head = "; ".join(cleaned[:max_items])
+    return f"{head}; e mais {len(cleaned) - max_items} item(ns)"
+
+
+def _reference_body_format_comments(
+    chunks: list[str], refs: list[str], body_limit: int, batch_indexes: list[int]
+) -> list[AgentComment]:
     comments: list[AgentComment] = []
-    matched_reference_keys: set[tuple[str, str]] = set()
+    pattern = re.compile(r"\b([A-ZÀ-Ý][A-Za-zÀ-ÿ'’`\-]+)\((\d{4}[a-z]?)\)")
+    batch_set = set(batch_indexes)
+
+    for idx, (chunk, ref) in enumerate(zip(chunks[:body_limit], refs[:body_limit])):
+        if idx not in batch_set:
+            continue
+        if _ref_block_type(ref) in {"reference_entry", "reference_heading", "caption", "table_cell"}:
+            continue
+        text = chunk or ""
+        for match in pattern.finditer(text):
+            excerpt = match.group(0)
+            comments.append(
+                AgentComment(
+                    agent="referencias",
+                    category="citation_format",
+                    message="A chamada autor-data está sem espaço entre o sobrenome e o ano.",
+                    paragraph_index=idx,
+                    issue_excerpt=excerpt,
+                    suggested_fix=f"{match.group(1)} ({match.group(2)})",
+                )
+            )
+
+    return comments
+
+
+def _find_reference_citation_indexes(chunks: list[str], refs: list[str], body_limit: int) -> list[int]:
+    indexes: list[int] = []
+    narrative_re = re.compile(r"\b[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’`\-]+(?:\s+et\s+al\.?)?\s*\(\d{4}[a-z]?\)")
+    parenthetical_re = re.compile(r"\([^)]*[A-Za-zÀ-ÿ][^)]*\b\d{4}[a-z]?[^)]*\)")
+
+    for idx, (chunk, ref) in enumerate(zip(chunks[:body_limit], refs[:body_limit])):
+        if _ref_block_type(ref) in {"reference_entry", "reference_heading", "caption", "table_cell"}:
+            continue
+        text = chunk or ""
+        if narrative_re.search(text) or parenthetical_re.search(text):
+            indexes.append(idx)
+
+    return indexes
+
+
+def _heuristic_reference_global_comments(chunks: list[str], refs: list[str], batch_indexes: list[int]) -> list[AgentComment]:
     reference_heading_idx = next((idx for idx, ref in enumerate(refs) if _ref_block_type(ref) == "reference_heading"), None)
     if reference_heading_idx is None:
         return []
 
-    for idx, (chunk, ref) in enumerate(zip(chunks, refs)):
-        if idx <= reference_heading_idx:
-            continue
+    body_limit = reference_heading_idx
+    citation_mentions = _reference_body_citation_mentions(chunks, refs, body_limit)
+    citation_keys = {key for _, _, key, _ in citation_mentions}
+    comments = _reference_body_format_comments(chunks, refs, body_limit, batch_indexes=batch_indexes)
+    batch_set = set(batch_indexes)
+
+    reference_entries: list[tuple[int, tuple[str, str], str]] = []
+    for idx, (chunk, ref) in enumerate(zip(chunks[reference_heading_idx + 1 :], refs[reference_heading_idx + 1 :]), start=reference_heading_idx + 1):
         if _ref_block_type(ref) != "reference_entry":
             continue
         entry_key = _reference_entry_key(chunk)
         if entry_key is None:
             continue
-        if entry_key in citation_keys:
-            matched_reference_keys.add(entry_key)
+        reference_entries.append((idx, entry_key, _reference_entry_label(chunk)))
+
+    reference_keys = {key for _, key, _ in reference_entries}
+    uncited_labels = [label for _, key, label in reference_entries if key not in citation_keys]
+    missing_mentions = [(idx, excerpt, key, display) for idx, excerpt, key, display in citation_mentions if key not in reference_keys]
+    missing_labels = [display for _, _, _, display in missing_mentions]
+
+    for idx, excerpt, _, display in missing_mentions:
+        if idx not in batch_set:
             continue
         comments.append(
             AgentComment(
                 agent="referencias",
-                category="inconsistency",
-                message="Esta referência não foi localizada nas citações do corpo do texto.",
+                category="citation_match",
                 paragraph_index=idx,
-                issue_excerpt=chunk,
-                suggested_fix="Verificar se a obra precisa ser citada no texto ou removida da lista de referências.",
+                message="Esta citação no corpo do texto não tem correspondência clara na lista de referências.",
+                issue_excerpt=excerpt,
+                suggested_fix=f"Incluir ou revisar a referência correspondente a {display} na lista final.",
             )
         )
 
-    missing_reference_keys = citation_keys - matched_reference_keys
-    if reference_heading_idx is not None:
-        for author, year in sorted(missing_reference_keys):
-            comments.append(
-                AgentComment(
-                    agent="referencias",
-                    category="inconsistency",
-                    paragraph_index=reference_heading_idx,
-                    message=f"Há uma citação no corpo do texto sem correspondência clara na lista de referências: {author}, {year}.",
-                    issue_excerpt=chunks[reference_heading_idx],
-                    suggested_fix="Incluir a referência correspondente na lista ou revisar a chamada no texto.",
-                )
+    if uncited_labels and reference_heading_idx in batch_set:
+        comments.append(
+            AgentComment(
+                agent="referencias",
+                category="inconsistency",
+                paragraph_index=reference_heading_idx,
+                message="Há referências na lista que não foram localizadas nas citações do corpo do texto.",
+                issue_excerpt=chunks[reference_heading_idx],
+                suggested_fix=f"Verificar estas obras: {_summarize_reference_labels(uncited_labels)}.",
             )
+        )
+
+    if missing_labels and reference_heading_idx in batch_set:
+        comments.append(
+            AgentComment(
+                agent="referencias",
+                category="inconsistency",
+                paragraph_index=reference_heading_idx,
+                message="Há citações no corpo do texto sem correspondência clara na lista de referências.",
+                issue_excerpt=chunks[reference_heading_idx],
+                suggested_fix=f"Incluir ou revisar as referências correspondentes a: {_summarize_reference_labels(missing_labels)}.",
+            )
+        )
 
     return comments
 
@@ -1109,7 +1219,10 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             return False
 
     if agent == "referencias" and block_type not in {"reference_entry", "reference_heading"}:
-        return False
+        if comment.category in {"citation_format", "citation_match"} and block_type in {"paragraph", "direct_quote", "list_item"}:
+            pass
+        else:
+            return False
     if agent == "referencias" and comment.auto_apply:
         if not _is_safe_text_normalization_auto_apply(comment, chunks):
             return False
@@ -1300,7 +1413,7 @@ def _normalize_batch_comments(
         normalized.extend(_heuristic_table_figure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "referencias":
         normalized.extend(_heuristic_reference_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-        normalized.extend(_heuristic_reference_global_comments(chunks=chunks, refs=refs))
+        normalized.extend(_heuristic_reference_global_comments(chunks=chunks, refs=refs, batch_indexes=batch_indexes))
     if agent == "estrutura":
         normalized.extend(_heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "tipografia":
@@ -1522,11 +1635,13 @@ def _agent_scope_indexes(agent: str, chunks: list[str], refs: list[str], section
 
     if agent == "referencias":
         sec = _expand_section_ranges(sections, ("refer", "bibliograf", "references", "bibliography"))
+        reference_heading_idx = next((idx for idx, ref in enumerate(refs) if _ref_block_type(ref) == "reference_heading"), total)
+        citation_like = _find_reference_citation_indexes(chunks, refs, body_limit=reference_heading_idx)
         if sec:
-            return sec
+            return sorted(dict.fromkeys([*citation_like, *sec]))
         content = _find_content_indexes(chunks, r"\b(doi|http://|https://|et al\.|v\.\s*\d+|n\.\s*\d+)\b")
         typed = _indexes_by_ref_type(refs, {"reference_entry", "reference_heading"})
-        picked = sorted(dict.fromkeys([*content, *typed]))
+        picked = sorted(dict.fromkeys([*citation_like, *content, *typed]))
         if not picked:
             return tail_30
         return picked
@@ -1596,16 +1711,18 @@ def run_conversation(
                 if isinstance(current_comments, list):
                     old_comments = current_comments[:comments_before_batch]
                     batch_comments = current_comments[comments_before_batch:]
-                    final_comments = [
-                        *old_comments,
-                        *_normalize_batch_comments(
-                            batch_comments,
-                            agent=agent,
-                            batch_indexes=batch_indexes,
-                            chunks=paragraphs,
-                            refs=refs,
-                        ),
-                    ]
+                    final_comments = _dedupe_comments(
+                        [
+                            *old_comments,
+                            *_normalize_batch_comments(
+                                batch_comments,
+                                agent=agent,
+                                batch_indexes=batch_indexes,
+                                chunks=paragraphs,
+                                refs=refs,
+                            ),
+                        ]
+                    )
                 batch_status = str(payload.get("batch_status", "") or "")
                 total = len(final_comments)
                 new_count = max(total - previous_count, 0)

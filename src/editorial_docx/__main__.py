@@ -7,6 +7,7 @@ from pathlib import Path
 from .docx_utils import apply_comments_to_docx
 from .document_loader import load_document
 from .graph_chat import run_conversation
+from .llm import get_llm_model_tag
 from .models import agent_short_label
 from .prompts import AGENT_ORDER
 
@@ -56,7 +57,8 @@ def main() -> int:
     auto_apply_count = 0
 
     base = args.input.with_suffix("")
-    output_json = args.output_json or base.parent / f"{base.name}_output.relatorio.json"
+    model_tag = get_llm_model_tag()
+    output_json = args.output_json or base.parent / f"{base.name}_output_{model_tag}.relatorio.json"
     output_json.write_text(
         json.dumps(
             [_serialize_comment(c) for c in visible_comments],
@@ -67,7 +69,7 @@ def main() -> int:
     )
 
     if loaded.kind == "docx":
-        output_docx = args.output_docx or base.parent / f"{base.name}_output.docx"
+        output_docx = args.output_docx or base.parent / f"{base.name}_output_{model_tag}.docx"
         output_docx.write_bytes(apply_comments_to_docx(args.input, result.comments))
         print(f"DOCX comentado: {output_docx}")
 

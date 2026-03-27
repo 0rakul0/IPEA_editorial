@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -53,6 +54,16 @@ def get_llm_config() -> dict[str, str]:
         "base_url": base_url,
         "api_key": api_key,
     }
+
+
+def get_llm_model_tag(config: dict[str, str] | None = None) -> str:
+    current = config or get_llm_config()
+    model_name = (current.get("model") or "modelo").strip().lower()
+    model_name = model_name.replace("\\", "/").split("/")[-1]
+    tag = re.sub(r"[^a-z0-9]+", "_", model_name).strip("_")
+    tag = re.sub(r"(?<=[a-z])_(?=\d)", "", tag)
+    tag = re.sub(r"(?<=\d)_(?=[a-z])", "", tag)
+    return tag or "modelo"
 
 
 def get_chat_model():
