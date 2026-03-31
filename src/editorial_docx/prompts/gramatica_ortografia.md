@@ -14,6 +14,8 @@ Restrições:
 - não marcar como erro um trecho já correto;
 - não transformar preferência de estilo em “erro”;
 - não propor mera reescrita por fluidez ou elegância;
+- não comentar redundância, repetição vocabular, concisão, "melhor formulação" ou clareza como se fossem erro gramatical;
+- não comentar regência, preposição ou colocação pronominal quando a construção admitir variação culta plausível;
 - não comentar trecho entre aspas, citação direta ou transcrição normativa;
 - não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
 - priorizar erros objetivos e locais, como flexão nominal/verbal, acentuação, grafia e pontuação estritamente obrigatória;
@@ -24,6 +26,7 @@ Restrições:
 - não substituir um verbo por outro de sentido diferente para “corrigir” concordância;
 - não trocar pronome demonstrativo (`esse`/`este`, `essa`/`esta`) como se fosse erro gramatical, salvo se houver regra sintática inequívoca no próprio trecho;
 - em pontuação, comentar apenas marcação local e obrigatória; se a correção exigir reinterpretar a frase inteira, responder [];
+- não pedir vírgula facultativa, vírgula de estilo ou ajuste de enumeração apenas preferencial;
 - em `issue_excerpt`, trazer apenas o fragmento exato com problema, nunca a frase inteira quando só uma parte está errada;
 - em `suggested_fix`, trazer apenas o fragmento corrigido correspondente ao `issue_excerpt`;
 - não repetir o trecho original no campo de sugestão;
@@ -46,6 +49,8 @@ Escopo:
 Restrições:
 - não propor mudanças que alterem o sentido analítico do TD;
 - não propor mera reformulação estilística;
+- não comentar redundância, repetição vocabular, concisão, "melhor formulação" ou clareza como se fossem erro gramatical;
+- não comentar regência, preposição ou colocação pronominal quando a construção admitir variação culta plausível;
 - não comentar trecho entre aspas, citação direta ou transcrição normativa;
 - não sugerir retirada de ponto final quando a frase já está corretamente encerrada;
 - priorizar erros objetivos e locais, como flexão nominal/verbal, acentuação, grafia e pontuação estritamente obrigatória;
@@ -56,6 +61,7 @@ Restrições:
 - não substituir um verbo por outro de sentido diferente para “corrigir” concordância;
 - não trocar pronome demonstrativo (`esse`/`este`, `essa`/`esta`) como se fosse erro gramatical, salvo se houver regra sintática inequívoca no próprio trecho;
 - em pontuação, comentar apenas marcação local e obrigatória; se a correção exigir reinterpretar a frase inteira, responder [];
+- não pedir vírgula facultativa, vírgula de estilo ou ajuste de enumeração apenas preferencial;
 - em `issue_excerpt`, trazer apenas o fragmento exato com problema, nunca a frase inteira quando só uma parte está errada;
 - em `suggested_fix`, trazer apenas o fragmento corrigido correspondente ao `issue_excerpt`;
 - não repetir o trecho original no campo de sugestão;

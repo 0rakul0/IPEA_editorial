@@ -41,7 +41,7 @@ Copie para `.env` e ajuste o provider desejado.
 ```env
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=gpt-5.2
 ```
 
 ### Ollama

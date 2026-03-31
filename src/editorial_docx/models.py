@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 AGENT_SHORT_LABELS = {
@@ -35,6 +35,23 @@ class AgentComment:
 
 
 @dataclass(slots=True)
+class VerificationDecision:
+    comment: AgentComment
+    accepted: bool
+    reason: str
+    source: str = "llm"
+    batch_index: int | None = None
+
+
+@dataclass(slots=True)
+class VerificationSummary:
+    decisions: list[VerificationDecision] = field(default_factory=list)
+    accepted_count: int = 0
+    rejected_count: int = 0
+
+
+@dataclass(slots=True)
 class ConversationResult:
     answer: str
     comments: list[AgentComment]
+    verification: VerificationSummary = field(default_factory=VerificationSummary)

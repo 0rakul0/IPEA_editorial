@@ -1055,12 +1055,9 @@ def _build_comment_lines_for_item(item: AgentComment, ordinal: int) -> list[str]
     message = (item.message or "").strip()
     suggestion = (item.suggested_fix or "").strip()
 
-    lines: list[str] = []
-    if message:
-        lines.append(message)
     if suggestion:
-        lines.append(f"Correção: {suggestion}")
-    return lines
+        return [f"Correção: {suggestion}"]
+    return [message] if message else []
 
 
 def _spans_overlap(left: tuple[int, int] | None, right: tuple[int, int] | None) -> bool:

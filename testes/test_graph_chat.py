@@ -5,9 +5,22 @@ from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import editorial_docx.graph_chat as graph_chat_module
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_paragraphs_with_metadata
-from editorial_docx.graph_chat import _agent_scope_indexes, _heuristic_reference_comments, _normalize_batch_comments, _parse_comments
+from editorial_docx.graph_chat import (
+    _agent_scope_indexes,
+    _connection_error_summary,
+    _heuristic_reference_comments,
+    _invoke_with_retry,
+    _is_connection_error,
+    _normalize_batch_comments,
+    _parse_comment_reviews,
+    _parse_comments,
+    _review_comments_with_llm,
+    _verify_batch_comments,
+    run_conversation,
+)
 from editorial_docx.models import AgentComment, agent_short_label
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
@@ -60,7 +73,7 @@ def test_parse_comments_returns_empty_list_for_empty_payload():
     assert _parse_comments("", agent="gramatica_ortografia") == []
 
 
-def test_parse_comments_accepts_tipografia_auto_apply_fields():
+def test_parse_comments_ignores_tipografia_auto_apply_fields():
     raw = """
     [
       {
@@ -78,8 +91,83 @@ def test_parse_comments_accepts_tipografia_auto_apply_fields():
     comments = _parse_comments(raw, agent="tipografia")
 
     assert len(comments) == 1
-    assert comments[0].auto_apply is True
+    assert comments[0].auto_apply is False
     assert "font=Times New Roman" in comments[0].format_spec
+
+
+def test_parse_comment_reviews_accepts_valid_json():
+    raw = """
+    [
+      {
+        "paragraph_index": 8,
+        "issue_excerpt": "e sugerem",
+        "suggested_fix": "e sugere",
+        "decision": "approve",
+        "reason": "Erro objetivo de concordância."
+      }
+    ]
+    """
+
+    items, status = _parse_comment_reviews(raw)
+
+    assert status == "json direto"
+    assert len(items) == 1
+    assert items[0]["decision"] == "approve"
+
+
+def test_review_comments_with_llm_filters_rejected_comments(monkeypatch):
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Concordância",
+            message="A concordância verbal está incorreta neste fragmento.",
+            paragraph_index=8,
+            issue_excerpt="e sugerem",
+            suggested_fix="e sugere",
+        ),
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Estilo",
+            message="Há repetição imediata do mesmo termo.",
+            paragraph_index=21,
+            issue_excerpt="tem o objetivo de",
+            suggested_fix="busca",
+        ),
+    ]
+
+    class FakeResponse:
+        content = """
+        [
+          {
+            "paragraph_index": 8,
+            "issue_excerpt": "e sugerem",
+            "suggested_fix": "e sugere",
+            "decision": "approve",
+            "reason": "Erro objetivo."
+          },
+          {
+            "paragraph_index": 21,
+            "issue_excerpt": "tem o objetivo de",
+            "suggested_fix": "busca",
+            "decision": "reject",
+            "reason": "Reescrita estilística."
+          }
+        ]
+        """
+
+    monkeypatch.setattr(graph_chat_module, "_invoke_with_model_fallback", lambda prompt, payload, operation: FakeResponse())
+
+    approved, status = _review_comments_with_llm(
+        comments,
+        agent="gramatica_ortografia",
+        question="Revise",
+        excerpt="[8] (...) e sugerem\n[21] (...) tem o objetivo de",
+        profile_key="TD",
+    )
+
+    assert len(approved) == 1
+    assert approved[0].issue_excerpt == "e sugerem"
+    assert "revisor: 1 aprovados, 1 rejeitados" in status
 
 
 def test_normalize_batch_comments_maps_local_index_to_global_index():
@@ -383,6 +471,20 @@ def test_normalize_batch_comments_adds_heuristic_for_compound_subject_agreement(
     assert normalized[0].suggested_fix == "que assentam o acesso"
 
 
+def test_normalize_batch_comments_adds_heuristic_for_exercicio_sugere():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=[
+            "O exercício realizado sustenta a possibilidade de pensar em dimensões distintas de categorização dos benefícios coletivos e sugerem possibilidades promissoras de desenvolvimento de indicadores."
+        ],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert any(item.issue_excerpt == "e sugerem" and item.suggested_fix == "e sugere" for item in normalized)
+
+
 def test_normalize_batch_comments_discards_plural_copula_for_singular_head():
     comments = [
         AgentComment(
@@ -509,6 +611,216 @@ def test_normalize_batch_comments_discards_synopsis_comment_about_uppercase_on_f
     assert normalized == []
 
 
+def test_normalize_batch_comments_discards_synopsis_word_limit_false_positive():
+    comments = [
+        AgentComment(
+            agent="sinopse_abstract",
+            category="Extensão",
+            message="A sinopse excede o limite de 250 palavras.",
+            paragraph_index=0,
+            issue_excerpt="Texto curto com bem menos palavras do que o limite editorial.",
+            suggested_fix="Reduzir a sinopse para no máximo 250 palavras.",
+        )
+    ]
+    chunks = ["Texto curto com bem menos palavras do que o limite editorial."]
+    refs = ["parágrafo 1 | tipo=abstract_body | align=justify"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_verify_batch_comments_reports_reason_for_synopsis_word_limit_false_positive():
+    comments = [
+        AgentComment(
+            agent="sinopse_abstract",
+            category="Extensão",
+            message="A sinopse excede o limite de 250 palavras.",
+            paragraph_index=0,
+            issue_excerpt="Texto curto com bem menos palavras do que o limite editorial.",
+            suggested_fix="Reduzir a sinopse para no máximo 250 palavras.",
+        )
+    ]
+
+    accepted, decisions = _verify_batch_comments(
+        comments,
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=["Texto curto com bem menos palavras do que o limite editorial."],
+        refs=["parágrafo 1 | tipo=abstract_body | align=justify"],
+    )
+
+    assert accepted == []
+    assert len(decisions) == 1
+    assert decisions[0].accepted is False
+    assert decisions[0].reason == "alegação de limite de palavras não confirmada"
+
+
+def test_normalize_batch_comments_discards_keywords_repetition_false_positive():
+    comments = [
+        AgentComment(
+            agent="sinopse_abstract",
+            category="Palavras-chave",
+            message="As palavras-chave repetem o termo 'seguridade social'.",
+            paragraph_index=0,
+            issue_excerpt="seguridade social; benefícios coletivos; indicadores sociais; saúde; assistência social; previdência social; proteção social.",
+            suggested_fix="Remover a repetição de 'seguridade social'.",
+        )
+    ]
+    chunks = [comments[0].issue_excerpt]
+    refs = ["parágrafo 1 | tipo=keywords_content"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_verify_batch_comments_rejects_duplicate_against_existing_comments():
+    existing = AgentComment(
+        agent="gramatica_ortografia",
+        category="Concordância",
+        message="A concordância está incorreta neste fragmento.",
+        paragraph_index=0,
+        issue_excerpt="benefícios monetário",
+        suggested_fix="benefícios monetários",
+    )
+    duplicate = AgentComment(
+        agent="gramatica_ortografia",
+        category="Concordância",
+        message="A concordância está incorreta neste fragmento.",
+        paragraph_index=0,
+        issue_excerpt="benefícios monetário",
+        suggested_fix="benefícios monetários",
+    )
+
+    accepted, decisions = _verify_batch_comments(
+        [duplicate],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["Os benefícios monetário do programa são relevantes."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+        existing_comments=[existing],
+        batch_index=2,
+    )
+
+    assert accepted == []
+    assert len(decisions) >= 1
+    assert all(decision.accepted is False for decision in decisions)
+    assert any(decision.reason == "comentário duplicado" and decision.source == "llm" for decision in decisions)
+    assert all(decision.batch_index == 2 for decision in decisions)
+
+
+def test_normalize_batch_comments_adds_synopsis_word_limit_heuristic_when_text_exceeds_limit():
+    long_synopsis = " ".join(f"palavra{i}" for i in range(251))
+
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=[long_synopsis],
+        refs=["parágrafo 1 | tipo=abstract_body | align=justify"],
+    )
+
+    assert any(item.category == "Extensão" and "250 palavras" in item.message for item in normalized)
+
+
+def test_verify_batch_comments_marks_heuristic_as_accepted_source():
+    accepted, decisions = _verify_batch_comments(
+        comments=[],
+        agent="sinopse_abstract",
+        batch_indexes=[0],
+        chunks=[" ".join(f"palavra{i}" for i in range(251))],
+        refs=["parágrafo 1 | tipo=abstract_body | align=justify"],
+    )
+
+    assert len(accepted) == 1
+    assert decisions[0].accepted is True
+    assert decisions[0].source == "heuristic"
+
+
+def test_normalize_batch_comments_discards_grammar_redundancy_rewrite_comment():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Estilo",
+            message="Há repetição imediata do mesmo termo, gerando construção incorreta por duplicação local.",
+            paragraph_index=0,
+            issue_excerpt="Com o objetivo de contribuir com essa discussão, esse trabalho tem o objetivo de",
+            suggested_fix="Com o objetivo de contribuir com essa discussão, este trabalho busca",
+        )
+    ]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["Com o objetivo de contribuir com essa discussão, esse trabalho tem o objetivo de classificar os benefícios coletivos."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert normalized == []
+
+
+def test_verify_batch_comments_reports_reason_for_grammar_regency_rewrite_comment():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Regência",
+            message="O verbo é transitivo direto e não exige a preposição.",
+            paragraph_index=0,
+            issue_excerpt="implica no reconhecimento",
+            suggested_fix="implica o reconhecimento",
+        )
+    ]
+
+    accepted, decisions = _verify_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["A medida implica no reconhecimento de direitos sociais."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert accepted == []
+    assert len(decisions) == 1
+    assert decisions[0].reason == "comentário gramatical de reescrita ou regência discutível"
+
+
+def test_normalize_batch_comments_discards_grammar_diacritic_removal_on_single_word():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Ortografia",
+            message="Há acento indevido na palavra.",
+            paragraph_index=0,
+            issue_excerpt="Beneficiômetro",
+            suggested_fix="Beneficiometro",
+        )
+    ]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["Beneficiômetro"],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert normalized == []
+
+
 def test_normalize_batch_comments_discards_reference_comment_that_rewrites_whole_entry():
     comments = [
         AgentComment(
@@ -558,6 +870,54 @@ def test_normalize_batch_comments_discards_reference_comment_that_only_asks_for_
     )
 
     assert normalized == []
+
+
+def test_normalize_batch_comments_discards_reference_incomplete_format_without_local_evidence():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="Referência com formato híbrido e incompleto: após o título há apenas a série e o ano, sem local/editora no padrão esperado.",
+            paragraph_index=0,
+            issue_excerpt="IPEA, Texto para Discussão (TD) 2941, 2023.",
+            suggested_fix="Reestruturar o trecho final para incluir local, editora e tratar a série de forma consistente, usando os dados disponíveis na fonte.",
+        )
+    ]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=["SILVA, João. Título do trabalho. IPEA, Texto para Discussão (TD) 2941, 2023."],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert normalized == []
+
+
+def test_verify_batch_comments_reports_reason_for_reference_incomplete_format_speculation():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="inconsistency",
+            message="Referência de artigo sem o local do periódico, elemento previsto na estrutura indicada.",
+            paragraph_index=0,
+            issue_excerpt="Saúde e Sociedade, v. 29, n. 3, p. e190151, 2020.",
+            suggested_fix="Inserir o local do periódico após o título do periódico, se essa informação constar na fonte consultada.",
+        )
+    ]
+
+    accepted, decisions = _verify_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=["BARROS, P. B. de Azevedo. Saúde e Sociedade, v. 29, n. 3, p. e190151, 2020."],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert accepted == []
+    assert len(decisions) == 1
+    assert decisions[0].reason == "completude bibliográfica sem evidência local"
 
 
 def test_normalize_batch_comments_discards_reference_title_comment_when_issue_is_page_range():
@@ -894,7 +1254,7 @@ def test_build_review_note_marks_typography_as_auto_applied():
     assert _build_review_note(item) == "Ajuste tipográfico aplicado automaticamente."
 
 
-def test_build_comment_lines_for_item_includes_message_and_suggested_fix():
+def test_build_comment_lines_for_item_prioritizes_suggested_fix():
     item = AgentComment(
         agent="gramatica_ortografia",
         category="ConcordÃ¢ncia",
@@ -904,7 +1264,20 @@ def test_build_comment_lines_for_item_includes_message_and_suggested_fix():
 
     lines = _build_comment_lines_for_item(item, ordinal=1)
 
-    assert lines == ["Ajustar concordÃ¢ncia verbal.", "Correção: vÃªm sendo"]
+    assert lines == ["Correção: vÃªm sendo"]
+
+
+def test_build_comment_lines_for_item_falls_back_to_message_when_no_fix():
+    item = AgentComment(
+        agent="referencias",
+        category="InconsistÃªncia",
+        message="HÃ¡ uma inconsistÃªncia a verificar.",
+        suggested_fix="",
+    )
+
+    lines = _build_comment_lines_for_item(item, ordinal=1)
+
+    assert lines == ["HÃ¡ uma inconsistÃªncia a verificar."]
 
 
 def test_agent_output_contract_requests_diagnosis_and_fix():
@@ -912,6 +1285,90 @@ def test_agent_output_contract_requests_diagnosis_and_fix():
 
     assert "use `message` para explicar de forma natural e objetiva o que está errado ou faltando no trecho" in contract
     assert "Use `suggested_fix` para trazer a correção exata do fragmento" in contract
+    assert "nunca mencione hipóteses descartadas" in contract
+
+
+def test_is_connection_error_detects_dns_resolution_failure():
+    exc = RuntimeError("Connection error")
+    exc.__cause__ = OSError("[Errno 11001] getaddrinfo failed")
+
+    assert _is_connection_error(exc) is True
+    assert _connection_error_summary(exc) == "falha de DNS/conectividade (`getaddrinfo failed`)"
+
+
+def test_invoke_with_retry_retries_connection_failure_and_then_succeeds(monkeypatch):
+    attempts = []
+
+    class FakeRunnable:
+        def invoke(self, payload):
+            attempts.append(payload)
+            if len(attempts) < 3:
+                raise RuntimeError("Connection error")
+            return {"ok": True}
+
+    monkeypatch.setattr(graph_chat_module, "get_llm_retry_config", lambda: {"max_retries": 3, "backoff_seconds": 0.0})
+
+    result = _invoke_with_retry(FakeRunnable(), {"question": "q"}, operation="teste")
+
+    assert result == {"ok": True}
+    assert len(attempts) == 3
+
+
+def test_invoke_with_model_fallback_uses_secondary_provider_after_openai_failure(monkeypatch):
+    calls = []
+
+    class FakePrompt:
+        def __or__(self, model):
+            return model
+
+    monkeypatch.setattr(
+        graph_chat_module,
+        "get_chat_models",
+        lambda: [
+            ({"provider": "openai", "model": "gpt-5.2"}, "primary"),
+            ({"provider": "openai_compatible", "model": "modelo-interno"}, "secondary"),
+        ],
+    )
+
+    def fake_invoke_with_retry(runnable, payload, operation):
+        calls.append(operation)
+        if "openai:gpt-5.2" in operation:
+            raise graph_chat_module.LLMConnectionFailure("teste", 3, RuntimeError("Connection error"))
+        return {"ok": "fallback"}
+
+    monkeypatch.setattr(graph_chat_module, "_invoke_with_retry", fake_invoke_with_retry)
+
+    result = graph_chat_module._invoke_with_model_fallback(prompt=FakePrompt(), payload={"q": "1"}, operation="agente")
+
+    assert result == {"ok": "fallback"}
+    assert any("openai:gpt-5.2" in call for call in calls)
+    assert any("openai_compatible:modelo-interno" in call for call in calls)
+
+
+def test_run_conversation_returns_partial_result_when_connection_fails(monkeypatch):
+    class FakeAgentApp:
+        def stream(self, initial_state, stream_mode="updates"):
+            yield {
+                "sinopse_abstract": {
+                    "comments": initial_state["comments"],
+                    "batch_status": "falha de conexão da LLM após retries: falha de DNS/conectividade (`getaddrinfo failed`)",
+                }
+            }
+
+    monkeypatch.setattr(graph_chat_module, "_build_graph", lambda agent_order, include_coordinator=False: FakeAgentApp())
+
+    result = run_conversation(
+        paragraphs=["SINOPSE", "Texto de teste."],
+        refs=["parágrafo 1 | tipo=abstract_heading", "parágrafo 2 | tipo=abstract_body | align=justify"],
+        sections=[],
+        question="Revise",
+        selected_agents=["sinopse_abstract", "gramatica_ortografia"],
+    )
+
+    assert result.comments == []
+    assert "Resumo parcial" in result.answer
+    assert "sinopse_abstract" in result.answer
+    assert "falha de conexão da LLM" in result.answer
 
 
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():
@@ -1050,7 +1507,7 @@ def test_normalize_batch_comments_accepts_safe_reference_auto_apply():
     assert normalized[0].auto_apply is False
 
 
-def test_normalize_batch_comments_rejects_unsafe_reference_auto_apply():
+def test_normalize_batch_comments_discards_speculative_reference_doi_completion():
     comments = [
         AgentComment(
             agent="referencias",
@@ -1073,8 +1530,7 @@ def test_normalize_batch_comments_rejects_unsafe_reference_auto_apply():
         refs=refs,
     )
 
-    assert len(normalized) == 1
-    assert normalized[0].auto_apply is False
+    assert normalized == []
 
 
 def test_normalize_batch_comments_discards_metadados_outside_front_matter():
@@ -2417,6 +2873,28 @@ def test_normalize_batch_comments_discards_structure_comment_with_paragraph_refe
     )
 
     assert normalized == []
+
+
+def test_reference_td_prompt_restricts_missing_field_and_cross_reference_inference():
+    instruction = load_agent_instruction("referencias", "td")
+
+    assert "Não cobrar volume, número, editora, local, data, DOI" in instruction
+    assert "Não usar comparação com \"as demais referências\"" in instruction
+
+
+def test_grammar_td_prompt_restricts_style_and_optional_comma_claims():
+    instruction = load_agent_instruction("gramatica_ortografia", "td")
+
+    assert "não comentar redundância, repetição vocabular, concisão" in instruction
+    assert "não comentar regência, preposição ou colocação pronominal quando a construção admitir variação culta plausível" in instruction
+    assert "não pedir vírgula facultativa" in instruction
+
+
+def test_sinopse_td_prompt_restricts_keywords_and_jel_count_claims():
+    instruction = load_agent_instruction("sinopse_abstract", profile_key="TD")
+
+    assert "não cobrar quantidade máxima de palavras-chave" in instruction
+    assert "não estiver explicitamente declarada no perfil TD" in instruction
 
 
 def test_apply_comments_to_docx_anchors_comment_to_issue_excerpt_and_highlights_it(tmp_path):

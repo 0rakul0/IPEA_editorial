@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from collections.abc import Callable
 from json import JSONDecodeError
@@ -11,9 +12,16 @@ from langgraph.graph import END, START, StateGraph
 
 from .context_selector import build_excerpt
 from .document_loader import Section
-from .llm import get_chat_model
-from .models import AgentComment, ConversationResult, agent_short_label
-from .prompts import AGENT_ORDER, AgentCommentsPayload, build_agent_prompt, build_coordinator_prompt
+from .llm import get_chat_model, get_chat_models, get_llm_retry_config
+from .models import AgentComment, ConversationResult, VerificationDecision, VerificationSummary, agent_short_label
+from .prompts import (
+    AGENT_ORDER,
+    AgentCommentsPayload,
+    CommentReviewsPayload,
+    build_agent_prompt,
+    build_comment_review_prompt,
+    build_coordinator_prompt,
+)
 
 
 class ChatState(TypedDict, total=False):
@@ -23,6 +31,14 @@ class ChatState(TypedDict, total=False):
     comments: list[AgentComment]
     answer: str
     batch_status: str
+
+
+class LLMConnectionFailure(RuntimeError):
+    def __init__(self, operation: str, attempts: int, original: Exception):
+        self.operation = operation
+        self.attempts = attempts
+        self.original = original
+        super().__init__(f"{operation} falhou por conexão após {attempts} tentativa(s): {original}")
 
 
 _CTRL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
@@ -74,6 +90,118 @@ def _is_json_body_error(exc: Exception) -> bool:
     return "could not parse the json body of your request" in msg
 
 
+def _iter_exception_chain(exc: Exception):
+    current: Exception | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        yield current
+        seen.add(id(current))
+        next_exc = current.__cause__ or current.__context__
+        current = next_exc if isinstance(next_exc, Exception) else None
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    connection_names = {
+        "APIConnectionError",
+        "APITimeoutError",
+        "ConnectError",
+        "ReadTimeout",
+        "WriteTimeout",
+        "ConnectTimeout",
+        "TimeoutException",
+    }
+    connection_tokens = {
+        "connection error",
+        "getaddrinfo failed",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "failed to resolve",
+        "dns",
+        "timed out",
+        "timeout",
+        "connection reset",
+        "network is unreachable",
+    }
+    for item in _iter_exception_chain(exc):
+        if item.__class__.__name__ in connection_names:
+            return True
+        msg = str(item).lower()
+        if any(token in msg for token in connection_tokens):
+            return True
+    return False
+
+
+def _connection_error_summary(exc: Exception) -> str:
+    messages: list[str] = []
+    for item in _iter_exception_chain(exc):
+        msg = str(item).strip()
+        if msg:
+            messages.append(msg)
+    for msg in messages:
+        if "getaddrinfo failed" in msg.lower():
+            return "falha de DNS/conectividade (`getaddrinfo failed`)"
+    if messages:
+        return messages[-1]
+    return "falha de conexão com a LLM"
+
+
+def _invoke_with_retry(runnable, payload: dict[str, str], operation: str):
+    retry_config = get_llm_retry_config()
+    max_retries = int(retry_config["max_retries"])
+    backoff_seconds = float(retry_config["backoff_seconds"])
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            return runnable.invoke(payload)
+        except Exception as exc:
+            if _is_json_body_error(exc) or not _is_connection_error(exc):
+                raise
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            if backoff_seconds > 0:
+                time.sleep(backoff_seconds * (2 ** (attempt - 1)))
+
+    if last_exc is None:
+        raise RuntimeError(f"{operation} falhou sem exceção capturada.")
+    raise LLMConnectionFailure(operation=operation, attempts=max_retries, original=last_exc) from last_exc
+
+
+def _partial_answer_from_comments(comments: list[AgentComment], prefix: str) -> str:
+    if comments:
+        points = "\n".join(f"- [{agent_short_label(c.agent)}] {c.message}" for c in comments[:12])
+        return prefix + "\n" + points
+    return prefix
+
+
+def _invoke_with_model_fallback(prompt, payload: dict[str, str], operation: str):
+    candidates = get_chat_models()
+    if not candidates:
+        return None
+
+    last_connection_failure: LLMConnectionFailure | None = None
+    last_non_connection_error: Exception | None = None
+
+    for config, model in candidates:
+        try:
+            return _invoke_with_retry(prompt | model, payload, operation=f"{operation} [{config['provider']}:{config['model']}]")
+        except LLMConnectionFailure as exc:
+            last_connection_failure = exc
+            continue
+        except Exception as exc:
+            last_non_connection_error = exc
+            if len(candidates) > 1 and config.get("provider") == "openai":
+                continue
+            raise
+
+    if last_connection_failure is not None:
+        raise last_connection_failure
+    if last_non_connection_error is not None:
+        raise last_non_connection_error
+    return None
+
+
 def _serialize_comments(comments: list[AgentComment]) -> str:
     return json.dumps(
         [
@@ -84,7 +212,6 @@ def _serialize_comments(comments: list[AgentComment]) -> str:
                 "paragraph_index": c.paragraph_index,
                 "issue_excerpt": c.issue_excerpt,
                 "suggested_fix": c.suggested_fix,
-                "auto_apply": c.auto_apply,
                 "format_spec": c.format_spec,
             }
             for c in comments
@@ -141,7 +268,7 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
                 paragraph_index=item.paragraph_index,
                 issue_excerpt=item.issue_excerpt,
                 suggested_fix=item.suggested_fix,
-                auto_apply=item.auto_apply,
+                auto_apply=False,
                 format_spec=item.format_spec,
             )
         )
@@ -156,8 +283,61 @@ def _parse_comments(raw: str, agent: str) -> list[AgentComment]:
     return items
 
 
+def _parse_comment_reviews(raw: str) -> tuple[list[dict[str, object]], str]:
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return [], "revisor vazio"
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    parsed_input: object | str = cleaned
+    status = "json direto"
+    try:
+        parsed_input = json.loads(cleaned)
+    except JSONDecodeError:
+        match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", cleaned)
+        if match:
+            try:
+                parsed_input = json.loads(match.group(1))
+                status = "json extraído"
+            except JSONDecodeError:
+                parsed_input = cleaned
+
+    if isinstance(parsed_input, dict):
+        for key in ("reviews", "itens", "items", "results", "root", "data"):
+            value = parsed_input.get(key)
+            if isinstance(value, list):
+                parsed_input = value
+                status = f"lista em `{key}`"
+                break
+
+    try:
+        parsed = CommentReviewsPayload.model_validate(parsed_input)
+    except Exception:
+        return [], "revisor fora do schema"
+
+    out = [
+        {
+            "paragraph_index": item.paragraph_index,
+            "issue_excerpt": item.issue_excerpt,
+            "suggested_fix": item.suggested_fix,
+            "decision": item.decision,
+            "reason": item.reason,
+        }
+        for item in parsed.root
+    ]
+    if not out:
+        return [], "revisor sem itens"
+    return out, status
+
+
 def _normalized_text(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().casefold())
+
+
+def _folded_text(value: str) -> str:
+    return _ascii_fold(_normalized_text(value))
 
 
 def _parse_format_spec(raw: str) -> dict[str, str]:
@@ -228,6 +408,10 @@ def _contains_quote_marks(text: str) -> bool:
 def _ascii_fold(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text or "")
     return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _diacritic_count(text: str) -> int:
+    return sum(1 for ch in unicodedata.normalize("NFKD", text or "") if unicodedata.combining(ch))
 
 
 def _strip_heading_prefix(text: str) -> str:
@@ -347,6 +531,29 @@ def _word_tokens(text: str) -> list[str]:
     return re.findall(r"[A-Za-zÀ-ÿ0-9]+", text or "", flags=re.UNICODE)
 
 
+def _count_words(text: str) -> int:
+    return len(_word_tokens(text))
+
+
+def _extract_word_limit(text: str) -> int | None:
+    match = re.search(r"\b(\d{2,4})\s+palavras\b", text or "", re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _split_keyword_entries(text: str) -> list[str]:
+    cleaned = re.sub(r"^(palavras-chave|keywords)\s*:\s*", "", (text or "").strip(), flags=re.IGNORECASE)
+    parts = [part.strip(" .;:,") for part in re.split(r"[;\n]", cleaned) if part.strip(" .;:,")]
+    return [part for part in parts if part]
+
+
+def _has_repeated_keyword_entries(text: str) -> bool:
+    keywords = [_normalized_text(part) for part in _split_keyword_entries(text)]
+    keywords = [part for part in keywords if part]
+    return len(keywords) != len(set(keywords))
+
+
 def _punctuation_only_change(issue_excerpt: str, suggested_fix: str) -> bool:
     issue_tokens = _word_tokens(issue_excerpt.casefold())
     suggestion_tokens = _word_tokens(suggested_fix.casefold())
@@ -400,6 +607,18 @@ def _drops_article_before_possessive(issue_excerpt: str, suggested_fix: str) -> 
     return False
 
 
+def _removes_diacritic_only_word(issue_excerpt: str, suggested_fix: str) -> bool:
+    issue = (issue_excerpt or "").strip()
+    suggestion = (suggested_fix or "").strip()
+    if not issue or not suggestion or " " in issue or " " in suggestion:
+        return False
+    if len(issue) < 5 or len(suggestion) < 5:
+        return False
+    if _ascii_fold(issue).casefold() != _ascii_fold(suggestion).casefold():
+        return False
+    return _diacritic_count(issue) > _diacritic_count(suggestion) and issue.casefold() != suggestion.casefold()
+
+
 def _introduces_plural_copula_for_singular_head(issue_excerpt: str, suggested_fix: str) -> bool:
     issue_norm = f" {_normalized_text(issue_excerpt)} "
     suggestion_norm = f" {_normalized_text(suggested_fix)} "
@@ -418,20 +637,103 @@ def _looks_like_full_reference_rewrite(source_text: str, suggested_fix: str) -> 
     return overlap >= 0.75 and abs(len(source_tokens) - len(suggestion_tokens)) <= 6
 
 
+def _is_reference_missing_data_speculation(message: str, suggested_fix: str) -> bool:
+    blob = _folded_text(" ".join([message or "", suggested_fix or ""]))
+    if not blob:
+        return False
+
+    uncertainty_tokens = {
+        "incomplet",
+        "ambigu",
+        "hibrid",
+        "nao identifica claramente",
+        "nao apresenta claramente",
+        "sem o local",
+        "sem local",
+        "sem a editora",
+        "sem local/editora",
+        "sem o local/editora",
+    }
+    metadata_tokens = {
+        "local",
+        "editora",
+        "instituicao",
+        "tipo",
+        "serie",
+        "doi",
+        "volume",
+        "numero",
+        "fasciculo",
+        "paginacao",
+        "paginacao",
+        "periodico",
+        "cidade",
+        "data",
+    }
+    action_tokens = {
+        "completar",
+        "incluir",
+        "inserir",
+        "reestruturar",
+        "conferir no documento-fonte",
+        "conferir na fonte",
+        "se disponivel",
+        "se essa informacao constar",
+        "usando os dados",
+    }
+
+    has_uncertainty = any(token in blob for token in uncertainty_tokens)
+    has_metadata = any(token in blob for token in metadata_tokens)
+    has_action = any(token in blob for token in action_tokens)
+    return has_metadata and (has_uncertainty or has_action)
+
+
+def _is_grammar_rewrite_or_regency_comment(message: str, suggested_fix: str) -> bool:
+    blob = _folded_text(" ".join([message or "", suggested_fix or ""]))
+    if not blob:
+        return False
+    if any(token in blob for token in {"repeticao", "redundanc", "duplicacao local", "melhor formulacao"}):
+        return True
+    return any(
+        token in blob
+        for token in {
+            "transitivo direto",
+            "regencia verbal",
+            "regencia nominal",
+            "colocacao pronominal",
+            "nao exige a preposicao",
+            "exige a preposicao em",
+            "exige a preposicao de",
+        }
+    )
+
+
+def _comment_key(item: AgentComment) -> tuple[str, str, int | None, str, str, str, bool, str]:
+    return (
+        item.agent,
+        item.category,
+        item.paragraph_index,
+        (item.message or "").strip(),
+        (item.issue_excerpt or "").strip(),
+        (item.suggested_fix or "").strip(),
+        item.auto_apply,
+        (item.format_spec or "").strip(),
+    )
+
+
+def _comment_review_key(paragraph_index: int | None, issue_excerpt: str, suggested_fix: str) -> tuple[int | None, str, str]:
+    return (
+        paragraph_index,
+        (issue_excerpt or "").strip(),
+        (suggested_fix or "").strip(),
+    )
+
+
 def _dedupe_comments(items: list[AgentComment]) -> list[AgentComment]:
     out: list[AgentComment] = []
     seen: set[tuple[str, str, int | None, str, str, str, bool, str]] = set()
     for item in items:
-        key = (
-            item.agent,
-            item.category,
-            item.paragraph_index,
-            (item.message or "").strip(),
-            (item.issue_excerpt or "").strip(),
-            (item.suggested_fix or "").strip(),
-            item.auto_apply,
-            (item.format_spec or "").strip(),
-        )
+        key = _comment_key(item)
         if key in seen:
             continue
         seen.add(key)
@@ -483,6 +785,20 @@ def _heuristic_grammar_comments(batch_indexes: list[int], chunks: list[str], ref
                 )
             )
 
+        if re.search(r"\bo exerc[ií]cio realizado sustenta\b", source_text, re.IGNORECASE):
+            match = re.search(r"\be sugerem\b", source_text, re.IGNORECASE)
+            if match:
+                comments.append(
+                    AgentComment(
+                        agent="gramatica_ortografia",
+                        category="Concordância",
+                        message="A concordância verbal está incorreta neste fragmento.",
+                        paragraph_index=idx,
+                        issue_excerpt=match.group(0),
+                        suggested_fix="e sugere",
+                    )
+                )
+
     return comments
 
 
@@ -493,10 +809,21 @@ def _heuristic_synopsis_comments(batch_indexes: list[int], chunks: list[str], re
             continue
         if _ref_block_type(refs[idx]) != "abstract_body":
             continue
-        if _ref_align(refs[idx]) == "justify":
-            continue
         text = (chunks[idx] or "").strip()
         if not text:
+            continue
+        if _count_words(text) > 250:
+            comments.append(
+                AgentComment(
+                    agent="sinopse_abstract",
+                    category="Extensão",
+                    message="Este resumo excede o limite de 250 palavras.",
+                    paragraph_index=idx,
+                    issue_excerpt=text,
+                    suggested_fix="Reduzir o resumo para no máximo 250 palavras.",
+                )
+            )
+        if _ref_align(refs[idx]) == "justify":
             continue
         comments.append(
             AgentComment(
@@ -1299,6 +1626,7 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
 
     if isinstance(comment.paragraph_index, int) and 0 <= comment.paragraph_index < len(chunks):
         if agent == "sinopse_abstract":
+            source_text = chunks[comment.paragraph_index] or ""
             synopsis_blob = _normalized_text(" ".join([comment.message or "", comment.suggested_fix or ""]))
             if ("portugu" in synopsis_blob and "ingl" in synopsis_blob) or any(
                 token in synopsis_blob for token in {"português e inglês", "portugues e ingles"}
@@ -1313,6 +1641,16 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
             issue_blob = _normalized_text(comment.issue_excerpt)
             if quoted_terms and not any(_normalized_text(term) in issue_blob for term in quoted_terms):
                 return False
+            word_limit = _extract_word_limit(" ".join([comment.message or "", comment.suggested_fix or ""]))
+            if word_limit is not None:
+                counted_text = comment.issue_excerpt or source_text
+                if _count_words(counted_text) <= word_limit:
+                    return False
+            if block_type == "keywords_content":
+                repetition_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
+                if any(token in repetition_blob for token in {"repet", "redundan"}):
+                    if not _has_repeated_keyword_entries(comment.issue_excerpt or source_text):
+                        return False
         if comment.issue_excerpt:
             excerpt_ok = _find_excerpt_index(comment.issue_excerpt, [comment.paragraph_index], chunks)
             if excerpt_ok is None and agent in {"gramatica_ortografia", "referencias"}:
@@ -1393,6 +1731,152 @@ def _matches_whole_paragraph(comment: AgentComment, chunks: list[str]) -> bool:
     return _normalized_text(issue) == _normalized_text(source)
 
 
+def _heuristic_comments_for_agent(agent: str, batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    comments: list[AgentComment] = []
+    if agent == "gramatica_ortografia":
+        comments.extend(_heuristic_grammar_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "sinopse_abstract":
+        comments.extend(_heuristic_synopsis_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "tabelas_figuras":
+        comments.extend(_heuristic_table_figure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "referencias":
+        comments.extend(_heuristic_reference_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+        comments.extend(_heuristic_reference_global_comments(chunks=chunks, refs=refs, batch_indexes=batch_indexes))
+    if agent == "estrutura":
+        comments.extend(_heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    if agent == "tipografia":
+        comments.extend(_heuristic_typography_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
+    return comments
+
+
+def _basic_comment_rejection_reason(comment: AgentComment) -> str | None:
+    if not (comment.message or "").strip():
+        return "mensagem vazia"
+
+    if comment.issue_excerpt and comment.suggested_fix and not comment.auto_apply:
+        if _normalized_text(comment.issue_excerpt) == _normalized_text(comment.suggested_fix):
+            return "sugestão idêntica ao trecho"
+    return None
+
+
+def _comment_rejection_reason(comment: AgentComment, agent: str, chunks: list[str], refs: list[str]) -> str | None:
+    basic_reason = _basic_comment_rejection_reason(comment)
+    if basic_reason is not None:
+        return basic_reason
+
+    if isinstance(comment.paragraph_index, int) and 0 <= comment.paragraph_index < len(chunks):
+        source_text = chunks[comment.paragraph_index] or ""
+        ref = refs[comment.paragraph_index] if comment.paragraph_index < len(refs) else ""
+        block_type = _ref_block_type(ref)
+
+        if agent == "sinopse_abstract":
+            word_limit = _extract_word_limit(" ".join([comment.message or "", comment.suggested_fix or ""]))
+            if word_limit is not None:
+                counted_text = comment.issue_excerpt or source_text
+                if _count_words(counted_text) <= word_limit:
+                    return "alegação de limite de palavras não confirmada"
+            if block_type == "keywords_content":
+                repetition_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
+                if any(token in repetition_blob for token in {"repet", "redundan"}):
+                    if not _has_repeated_keyword_entries(comment.issue_excerpt or source_text):
+                        return "alegação de repetição não confirmada"
+        if agent == "gramatica_ortografia":
+            excerpt = comment.issue_excerpt or source_text
+            if _is_grammar_rewrite_or_regency_comment(comment.message, comment.suggested_fix):
+                return "comentário gramatical de reescrita ou regência discutível"
+            if _removes_diacritic_only_word(excerpt, comment.suggested_fix):
+                return "remoção de acento não confirmada"
+        if agent == "referencias" and block_type in {"reference_entry", "reference_heading"}:
+            if _is_reference_missing_data_speculation(comment.message, comment.suggested_fix):
+                return "completude bibliográfica sem evidência local"
+
+    if not _should_keep_comment(comment, agent=agent, chunks=chunks, refs=refs):
+        return "descartado por regra de verificação"
+    return None
+
+
+def _summarize_verification(decisions: list[VerificationDecision]) -> VerificationSummary:
+    accepted_count = sum(1 for decision in decisions if decision.accepted)
+    rejected_count = sum(1 for decision in decisions if not decision.accepted)
+    return VerificationSummary(
+        decisions=decisions[:],
+        accepted_count=accepted_count,
+        rejected_count=rejected_count,
+    )
+
+
+def _verify_batch_comments(
+    comments: list[AgentComment],
+    agent: str,
+    batch_indexes: list[int],
+    chunks: list[str],
+    refs: list[str],
+    existing_comments: list[AgentComment] | None = None,
+    batch_index: int | None = None,
+) -> tuple[list[AgentComment], list[VerificationDecision]]:
+    candidates: list[tuple[str, AgentComment]] = []
+    for comment in comments:
+        remapped = _limit_auto_apply(_remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks))
+        candidates.append(("llm", remapped))
+    for comment in _heuristic_comments_for_agent(agent=agent, batch_indexes=batch_indexes, chunks=chunks, refs=refs):
+        candidates.append(("heuristic", comment))
+
+    accepted: list[AgentComment] = []
+    decisions: list[VerificationDecision] = []
+    seen_existing = {_comment_key(item) for item in (existing_comments or [])}
+    seen_batch: set[tuple[str, str, int | None, str, str, str, bool, str]] = set()
+
+    for source, candidate in candidates:
+        key = _comment_key(candidate)
+        if key in seen_existing or key in seen_batch:
+            decisions.append(
+                VerificationDecision(
+                    comment=candidate,
+                    accepted=False,
+                    reason="comentário duplicado",
+                    source=source,
+                    batch_index=batch_index,
+                )
+            )
+            continue
+
+        reason = _basic_comment_rejection_reason(candidate)
+        if reason is None and source == "llm":
+            reason = _comment_rejection_reason(candidate, agent=agent, chunks=chunks, refs=refs)
+        if reason is not None:
+            decisions.append(
+                VerificationDecision(
+                    comment=candidate,
+                    accepted=False,
+                    reason=reason,
+                    source=source,
+                    batch_index=batch_index,
+                )
+            )
+            continue
+
+        accepted.append(candidate)
+        seen_batch.add(key)
+        decisions.append(
+            VerificationDecision(
+                comment=candidate,
+                accepted=True,
+                reason="aceito",
+                source=source,
+                batch_index=batch_index,
+            )
+        )
+
+    return accepted, decisions
+
+
+def _format_batch_status(status: str, decisions: list[VerificationDecision]) -> str:
+    summary = _summarize_verification(decisions)
+    base = (status or "").strip()
+    suffix = f"verif: {summary.accepted_count} aceitos, {summary.rejected_count} rejeitados"
+    return f"{base} | {suffix}" if base else suffix
+
+
 def _normalize_batch_comments(
     comments: list[AgentComment],
     agent: str,
@@ -1400,31 +1884,74 @@ def _normalize_batch_comments(
     chunks: list[str],
     refs: list[str],
 ) -> list[AgentComment]:
-    normalized: list[AgentComment] = []
+    accepted, _ = _verify_batch_comments(
+        comments=comments,
+        agent=agent,
+        batch_indexes=batch_indexes,
+        chunks=chunks,
+        refs=refs,
+        existing_comments=[],
+    )
+    return accepted
+
+
+_REVIEWER_ENABLED_AGENTS = {"sinopse_abstract", "gramatica_ortografia"}
+
+
+def _review_comments_with_llm(
+    comments: list[AgentComment],
+    agent: str,
+    question: str,
+    excerpt: str,
+    profile_key: str | None,
+) -> tuple[list[AgentComment], str]:
+    if agent not in _REVIEWER_ENABLED_AGENTS or not comments:
+        return comments, "revisor ignorado"
+
+    prompt = build_comment_review_prompt(agent, profile_key=profile_key)
+    payload = {
+        "question": _sanitize_for_llm(question),
+        "document_excerpt": _sanitize_for_llm(excerpt),
+        "comments_json": _sanitize_for_llm(_serialize_comments(comments)),
+    }
+    try:
+        response = _invoke_with_model_fallback(prompt, payload, operation=f"revisor {agent}")
+        if response is None:
+            return comments, "revisor indisponível"
+    except LLMConnectionFailure as exc:
+        return comments, f"revisor indisponível por conexão: {_connection_error_summary(exc.original)}"
+    except Exception:
+        return comments, "revisor indisponível"
+
+    raw = response.content if isinstance(response.content, str) else str(response.content)
+    reviews, status = _parse_comment_reviews(raw)
+    if not reviews:
+        return comments, status
+
+    verdict_by_key = {
+        _comment_review_key(
+            item.get("paragraph_index"),
+            str(item.get("issue_excerpt") or ""),
+            str(item.get("suggested_fix") or ""),
+        ): item
+        for item in reviews
+    }
+
+    approved: list[AgentComment] = []
+    rejected = 0
     for comment in comments:
-        remapped = _limit_auto_apply(_remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks))
-        if _should_keep_comment(remapped, agent=agent, chunks=chunks, refs=refs):
-            normalized.append(remapped)
-    if agent == "gramatica_ortografia":
-        normalized.extend(_heuristic_grammar_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-    if agent == "sinopse_abstract":
-        normalized.extend(_heuristic_synopsis_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-    if agent == "tabelas_figuras":
-        normalized.extend(_heuristic_table_figure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-    if agent == "referencias":
-        normalized.extend(_heuristic_reference_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-        normalized.extend(_heuristic_reference_global_comments(chunks=chunks, refs=refs, batch_indexes=batch_indexes))
-    if agent == "estrutura":
-        normalized.extend(_heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-    if agent == "tipografia":
-        normalized.extend(_heuristic_typography_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
-    return _dedupe_comments(normalized)
+        review = verdict_by_key.get(_comment_review_key(comment.paragraph_index, comment.issue_excerpt, comment.suggested_fix))
+        if review and review.get("decision") == "reject":
+            rejected += 1
+            continue
+        approved.append(comment)
+
+    return approved, f"{status} | revisor: {len(approved)} aprovados, {rejected} rejeitados"
 
 
 def _agent_node(agent: str):
     def run(state: ChatState) -> ChatState:
-        model = get_chat_model()
-        if model is None:
+        if get_chat_model() is None:
             return {
                 "comments": state.get("comments", []),
                 "batch_status": "modelo indisponível",
@@ -1436,7 +1963,17 @@ def _agent_node(agent: str):
             "document_excerpt": _sanitize_for_llm(state["document_excerpt"]),
         }
         try:
-            response = (prompt | model).invoke(payload)
+            response = _invoke_with_model_fallback(prompt, payload, operation=f"agente {agent}")
+            if response is None:
+                return {
+                    "comments": state.get("comments", []),
+                    "batch_status": "modelo indisponível",
+                }
+        except LLMConnectionFailure as exc:
+            return {
+                "comments": state.get("comments", []),
+                "batch_status": f"falha de conexão da LLM após retries: {_connection_error_summary(exc.original)}",
+            }
         except Exception as exc:
             if _is_json_body_error(exc):
                 return {
@@ -1446,16 +1983,23 @@ def _agent_node(agent: str):
             raise
         raw = response.content if isinstance(response.content, str) else str(response.content)
         items, status = _parse_comments_with_status(raw, agent=agent)
-        merged = [*state.get("comments", []), *items]
-        return {"comments": merged, "batch_status": status}
+        reviewed_items, review_status = _review_comments_with_llm(
+            items,
+            agent=agent,
+            question=state["question"],
+            excerpt=state["document_excerpt"],
+            profile_key=state.get("profile_key"),
+        )
+        merged = [*state.get("comments", []), *reviewed_items]
+        combined_status = status if review_status == "revisor ignorado" else f"{status} | {review_status}"
+        return {"comments": merged, "batch_status": combined_status}
 
     return run
 
 
 def _coordinator_node(state: ChatState) -> ChatState:
-    model = get_chat_model()
     comments = state.get("comments", [])
-    if model is None:
+    if get_chat_model() is None:
         if comments:
             points = "\n".join(f"- [{agent_short_label(c.agent)}] {c.message}" for c in comments[:8])
             answer = "Resumo dos agentes:\n" + points
@@ -1470,7 +2014,17 @@ def _coordinator_node(state: ChatState) -> ChatState:
         "comments_json": _sanitize_for_llm(_serialize_comments(comments)),
     }
     try:
-        response = (prompt | model).invoke(payload)
+        response = _invoke_with_model_fallback(prompt, payload, operation="coordenador")
+        if response is None:
+            return {"answer": _partial_answer_from_comments(comments, "Resumo parcial (modelo indisponível no coordenador):")}
+    except LLMConnectionFailure as exc:
+        return {
+            "answer": _partial_answer_from_comments(
+                comments,
+                "Resumo parcial (falha de conexão da LLM no coordenador: "
+                f"{_connection_error_summary(exc.original)}):",
+            )
+        }
     except Exception as exc:
         if _is_json_body_error(exc):
             if comments:
@@ -1679,7 +2233,9 @@ def run_conversation(
     agent_apps = {agent: _build_graph([agent], include_coordinator=False) for agent in agent_order}
 
     final_comments: list[AgentComment] = []
-    previous_count = 0
+    verification_decisions: list[VerificationDecision] = []
+    interrupted_reason = ""
+    interrupted_agent = ""
 
     for agent in agent_order:
         scoped_indexes = _agent_scope_indexes(agent, paragraphs, refs, sections)
@@ -1687,6 +2243,7 @@ def run_conversation(
         if not batches:
             continue
 
+        stop_processing = False
         for batch_idx, batch_indexes in enumerate(batches, start=1):
             excerpt = build_excerpt(indexes=batch_indexes, chunks=paragraphs, refs=refs, max_chars=1_000_000)
             comments_before_batch = len(final_comments)
@@ -1711,40 +2268,63 @@ def run_conversation(
                 if isinstance(current_comments, list):
                     old_comments = current_comments[:comments_before_batch]
                     batch_comments = current_comments[comments_before_batch:]
-                    final_comments = _dedupe_comments(
-                        [
-                            *old_comments,
-                            *_normalize_batch_comments(
-                                batch_comments,
-                                agent=agent,
-                                batch_indexes=batch_indexes,
-                                chunks=paragraphs,
-                                refs=refs,
-                            ),
-                        ]
+                    verified_comments, batch_decisions = _verify_batch_comments(
+                        comments=batch_comments,
+                        agent=agent,
+                        batch_indexes=batch_indexes,
+                        chunks=paragraphs,
+                        refs=refs,
+                        existing_comments=old_comments,
+                        batch_index=batch_idx,
                     )
-                batch_status = str(payload.get("batch_status", "") or "")
+                    final_comments = [*old_comments, *verified_comments]
+                    verification_decisions.extend(batch_decisions)
+                else:
+                    batch_decisions = []
+                batch_status = _format_batch_status(str(payload.get("batch_status", "") or ""), batch_decisions)
                 total = len(final_comments)
-                new_count = max(total - previous_count, 0)
-                previous_count = total
+                new_count = sum(1 for decision in batch_decisions if decision.accepted)
                 if on_agent_done is not None:
                     on_agent_done(agent, new_count, total)
                 if on_agent_batch_status is not None:
                     on_agent_batch_status(agent, batch_idx, len(batches), batch_status)
                 if on_agent_progress is not None:
                     on_agent_progress(agent, batch_idx, len(batches), new_count, total)
+                if "falha de conexao da llm" in _folded_text(batch_status):
+                    interrupted_reason = batch_status
+                    interrupted_agent = agent
+                    stop_processing = True
+                    break
 
-    coordinator_state: ChatState = {
-        "question": question,
-        "document_excerpt": (
-            "Revisão por escopo de agente concluída. "
-            f"Total de trechos no documento: {len(paragraphs)}. "
-            f"Agentes executados: {', '.join(agent_order)}."
-        ),
-        "profile_key": profile_key,
-        "comments": final_comments,
-        "answer": "",
-    }
-    final_answer = _coordinator_node(coordinator_state).get("answer", "")
+            if stop_processing:
+                break
 
-    return ConversationResult(answer=final_answer, comments=final_comments)
+        if stop_processing:
+            break
+
+    if interrupted_reason:
+        final_answer = _partial_answer_from_comments(
+            final_comments,
+            "Resumo parcial (execução interrompida por falha de conexão da LLM"
+            + (f" no agente {interrupted_agent}" if interrupted_agent else "")
+            + f": {interrupted_reason}).",
+        )
+    else:
+        coordinator_state: ChatState = {
+            "question": question,
+            "document_excerpt": (
+                "Revisão por escopo de agente concluída. "
+                f"Total de trechos no documento: {len(paragraphs)}. "
+                f"Agentes executados: {', '.join(agent_order)}."
+            ),
+            "profile_key": profile_key,
+            "comments": final_comments,
+            "answer": "",
+        }
+        final_answer = _coordinator_node(coordinator_state).get("answer", "")
+
+    return ConversationResult(
+        answer=final_answer,
+        comments=final_comments,
+        verification=_summarize_verification(verification_decisions),
+    )

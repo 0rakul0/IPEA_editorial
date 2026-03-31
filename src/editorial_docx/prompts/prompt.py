@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from lxml import etree
 
 from .profiles import get_prompt_profile
-from .schemas import agent_output_contract_text
+from .schemas import agent_output_contract_text, review_output_contract_text
 
 PROMPTS_DIR = Path(__file__).resolve().parent
 AUX_NORMAS_DIR = PROMPTS_DIR.parent / "auxiliar_normas"
@@ -256,3 +256,42 @@ def build_coordinator_prompt(profile_key: str | None = None) -> ChatPromptTempla
             ),
         ]
     ).partial(**profile_ctx)
+
+
+def build_comment_review_prompt(agent_name: str, profile_key: str | None = None) -> ChatPromptTemplate:
+    instruction = load_agent_instruction(agent_name, profile_key=profile_key)
+    profile_ctx = _build_profile_context(profile_key)
+    support_context = _build_agent_support_context(agent_name)
+
+    return ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "Você é o revisor final de comentários do agente editorial. "
+                    "Sua função é avaliar apenas os comentários propostos, nunca criar novos. "
+                    "Aplique as mesmas restrições do agente original com rigor ainda maior. "
+                    "Aprove somente comentários objetivos, locais, necessários e claramente sustentados pelo trecho. "
+                    "Rejeite comentários especulativos, verbosos, estilísticos, redundantes, contraditórios ou fora de escopo.\n\n"
+                    "Instrução do agente original:\n{agent_instruction}"
+                ),
+            ),
+            (
+                "human",
+                (
+                    "Perfil do documento: {profile_description}\n"
+                    "Instrução de perfil: {profile_instruction}\n\n"
+                    "Normas auxiliares locais:\n{support_context}\n\n"
+                    "Trecho do documento:\n{document_excerpt}\n\n"
+                    "Comentários propostos (JSON):\n{comments_json}\n\n"
+                    "Revise cada comentário proposto e retorne apenas `approve` ou `reject`, sem reescrever a correção.\n\n"
+                    "Contrato de saída:\n{output_contract}\n"
+                ),
+            ),
+        ]
+    ).partial(
+        **profile_ctx,
+        agent_instruction=instruction,
+        support_context=support_context or "(nenhuma norma auxiliar carregada para este agente)",
+        output_contract=review_output_contract_text(),
+    )

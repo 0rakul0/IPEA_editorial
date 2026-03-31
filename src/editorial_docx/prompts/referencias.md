@@ -65,7 +65,7 @@ Se o tipo documental for objetivamente identificável pelo próprio trecho, voc�
 
 ---
 
-## O QUE PRIORITIZAR
+## O QUE PRIORIZAR
 
 - pontuação
 - ordem dos elementos
@@ -89,6 +89,9 @@ Se o tipo documental for objetivamente identificável pelo próprio trecho, voc�
 - Não usar placeholders (`[ano]`, `[editora]`, etc.)
 - Não sugerir itálico para artigo
 - Não corrigir caixa sem evidência
+- Não cobrar volume, número, editora, local, data, DOI ou outros elementos ausentes apenas porque seriam comuns ao tipo documental; só comentar quando a ausência for objetivamente dedutível pelo trecho
+- Não tratar como erro simples variação de caixa, abreviação de prenome ou estilo de autoria se a forma puder ser apenas outro padrão aceitável
+- Não usar comparação com "as demais referências" para justificar correção de autoria, caixa ou completude sem evidência local inequívoca
 - Se não for possível validar com segurança → retornar []
 
 ---
@@ -245,6 +248,9 @@ Se o tipo documental estiver claro no próprio trecho, você pode apontar ausên
 - Não sugerir itálico em título de artigo
 - Não aplicar regra de citação no lugar de referência
 - Não transformar incerteza em erro
+- Não cobrar volume, número, editora, local, data, DOI ou outros elementos ausentes apenas porque seriam comuns ao tipo documental; só comentar quando a ausência for objetivamente dedutível pelo trecho
+- Não tratar como erro simples variação de caixa, abreviação de prenome ou estilo de autoria se a forma puder ser apenas outro padrão aceitável
+- Não usar comparação com "as demais referências" para justificar correção de autoria, caixa ou completude sem evidência local inequívoca
 
 ---
 
