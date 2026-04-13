@@ -75,6 +75,7 @@ Se o tipo documental for objetivamente identificável pelo próprio trecho, voc�
 - DOI / URL / acesso, apenas quando já houver indício no trecho
 - falta objetiva de elemento obrigatório quando o próprio trecho deixar claro o tipo documental
 - duplicação indevida de local/editora
+- quando houver referência correspondente com mesmo autor, mas ano diferente, classificar como divergência de ano; não dizer que está ausente
 - referências coladas
 
 ---
