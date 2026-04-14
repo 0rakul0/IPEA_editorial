@@ -9,6 +9,7 @@ AGENT_SHORT_LABELS = {
     "estrutura": "est",
     "gramatica_ortografia": "gram",
     "tabelas_figuras": "tab",
+    "comentarios_usuario_referencias": "usrref",
     "referencias": "ref",
     "tipografia": "tip",
     "coordenador": "coord",
@@ -32,6 +33,16 @@ class AgentComment:
     review_status: str = ""
     approved_text: str = ""
     reviewer_note: str = ""
+
+
+@dataclass(slots=True)
+class DocumentUserComment:
+    comment_id: int
+    author: str
+    text: str
+    paragraph_index: int | None = None
+    anchor_excerpt: str = ""
+    paragraph_text: str = ""
 
 
 @dataclass(slots=True)

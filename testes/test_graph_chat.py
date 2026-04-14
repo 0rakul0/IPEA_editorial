@@ -1,13 +1,15 @@
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 import sys
+import json
 from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import editorial_docx.graph_chat as graph_chat_module
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
-from editorial_docx.docx_utils import apply_comments_to_docx, extract_paragraphs_with_metadata
+from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
+from editorial_docx.document_loader import Section
 from editorial_docx.graph_chat import (
     _agent_scope_indexes,
     _connection_error_summary,
@@ -21,9 +23,10 @@ from editorial_docx.graph_chat import (
     _verify_batch_comments,
     run_conversation,
 )
-from editorial_docx.models import AgentComment, agent_short_label
+from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, agent_short_label
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
+from editorial_docx.user_comment_refs import build_reference_search_requests
 
 
 SAMPLE_DOCX = Path(__file__).resolve().parent / "234362_TD_3125_Benefícios coletivos (53 laudas).docx"
@@ -1911,6 +1914,66 @@ def test_normalize_batch_comments_matches_first_reference_when_two_entries_are_g
     )
 
 
+def test_normalize_batch_comments_matches_reference_with_historical_year_in_title_and_uppercase_author():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "Os fluxos migratórios caíram em termos absolutos e a corrente imigratória perdeu força (Levy, 1974).",
+            "Referências",
+            "LEVY, Maria Stella Ferreira. O papel da migração internacional na evolução da população brasileira (1872 a 1972). Revista de Saúde Pública, v. 8, n. 1, p. 49-90, 1974. Disponível em: https://example.com. Acesso em: 14 abr. 2026.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all(item.category != "citation_match" for item in normalized)
+
+
+def test_normalize_batch_comments_matches_parenthetical_multi_author_reference_case_insensitively():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "A formulação original do problema aparece em estudos posteriores (Walker e Oliveira, 1991).",
+            "Referências",
+            "WALKER, J.; OLIVEIRA, F. Título. Revista X, 1991.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all(item.category != "citation_match" for item in normalized)
+
+
+def test_normalize_batch_comments_matches_reference_with_particle_surname():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "Segundo De Negri (2001), a dinâmica industrial brasileira mudou ao longo do período.",
+            "Referências",
+            "DE NEGRI, Fernanda. Título. Brasília: Ipea, 2001.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all(item.category != "citation_match" for item in normalized)
+
+
 def test_normalize_batch_comments_adds_reference_citation_format_comment_for_missing_space():
     normalized = _normalize_batch_comments(
         comments=[],
@@ -3080,4 +3143,451 @@ def test_apply_comments_to_docx_applies_auto_fix_silently_without_comment(tmp_pa
 
     assert "Times New Roman" not in document_xml
     assert "<w:comment " in comments_xml
+
+
+def test_run_conversation_uses_prepared_review_pipeline(monkeypatch):
+    prepared_marker = object()
+    calls: dict[str, object] = {}
+
+    def fake_prepare_review_batches(paragraphs, refs, sections, selected_agents=None):
+        calls["prepare"] = {
+            "paragraphs": paragraphs,
+            "refs": refs,
+            "sections": sections,
+            "selected_agents": selected_agents,
+        }
+        return prepared_marker
+
+    def fake_run_prepared_review(**kwargs):
+        calls["run"] = kwargs
+        return ConversationResult(answer="ok", comments=[])
+
+    monkeypatch.setattr(graph_chat_module, "prepare_review_batches", fake_prepare_review_batches)
+    monkeypatch.setattr(graph_chat_module, "run_prepared_review", fake_run_prepared_review)
+
+    result = run_conversation(
+        paragraphs=["Trecho 1"],
+        refs=["parágrafo 1 | tipo=paragraph"],
+        sections=[Section(title="Introdução", start_idx=0, end_idx=0)],
+        question="revise",
+        selected_agents=["gramatica_ortografia"],
+    )
+
+    assert result.answer == "ok"
+    assert calls["prepare"]["selected_agents"] == ["gramatica_ortografia"]
+    assert calls["run"]["prepared_document"] is prepared_marker
+    assert calls["run"]["question"] == "revise"
+
+
+def test_prepare_review_batches_builds_progressive_context_payload():
+    paragraphs = [
+        "1 Introdução",
+        "O texto contextualiza o problema.",
+        "O trecho principal apresenta o argumento.",
+        "O parágrafo seguinte fecha a seção.",
+        "Referências",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=heading",
+        "parágrafo 2 | tipo=paragraph",
+        "parágrafo 3 | tipo=paragraph",
+        "parágrafo 4 | tipo=paragraph",
+        "parágrafo 5 | tipo=reference_heading",
+    ]
+    sections = [
+        Section(title="1 Introdução", start_idx=0, end_idx=3),
+        Section(title="Referências", start_idx=4, end_idx=4),
+    ]
+
+    prepared = graph_chat_module.prepare_review_batches(
+        paragraphs=paragraphs,
+        refs=refs,
+        sections=sections,
+        selected_agents=["gramatica_ortografia"],
+    )
+
+    batch = prepared.agent_batches["gramatica_ortografia"][0]
+    excerpt = graph_chat_module._build_batch_review_excerpt(
+        prepared=prepared,
+        batch=batch,
+        running_summary="Já verificado: abertura da seção.",
+    )
+
+    assert prepared.toc == ["1 Introdução [0-3]", "Referências [4-4]"]
+    assert batch.focus_excerpt
+    assert batch.window_excerpt
+    assert "1 Introdução" in batch.headings
+    assert "MAPA DO DOCUMENTO" in excerpt
+    assert "MEMÓRIA PROGRESSIVA DO AGENTE" in excerpt
+    assert "JANELA DE CONTEXTO" in excerpt
+    assert "TRECHO-ALVO DESTA PASSAGEM" in excerpt
+
+
+def test_reference_scope_does_not_treat_common_noun_plus_year_as_citation():
+    chunks = [
+        "No nível do vínculo, foram acrescentados campos disponíveis até 1993, e no período (1993) o formulário contava com 16 campos.",
+        "Referências",
+        "SILVA, João. Estudo histórico. Brasília: Ipea, 1993.",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=paragraph",
+        "parágrafo 2 | tipo=reference_heading",
+        "parágrafo 3 | tipo=reference_entry",
+    ]
+
+    indexes = graph_chat_module._find_reference_citation_indexes(chunks, refs, body_limit=1)
+    comments = graph_chat_module._heuristic_reference_global_comments(chunks, refs, batch_indexes=[0, 1, 2])
+
+    assert indexes == []
+    assert not any(item.category == "citation_match" for item in comments)
+    assert not any("período (1993)" in (item.suggested_fix or "") for item in comments)
+
+
+def test_reference_scope_does_not_treat_illustration_caption_as_citation_even_with_plain_paragraph_type():
+    chunks = [
+        "Figura 1\nFormulario da Relacao Anual de Empregados - Lei dos Dois Tercos (1931)",
+        "Referencias",
+        "SILVA, Joao. Estudo historico. Brasilia: Ipea, 1993.",
+    ]
+    refs = [
+        "paragrafo 1 | tipo=paragraph | estilo=Normal",
+        "paragrafo 2 | tipo=reference_heading",
+        "paragrafo 3 | tipo=reference_entry",
+    ]
+
+    indexes = graph_chat_module._find_reference_citation_indexes(chunks, refs, body_limit=1)
+    comments = graph_chat_module._heuristic_reference_global_comments(chunks, refs, batch_indexes=[0, 1, 2])
+
+    assert indexes == []
+    assert not any(item.category == "citation_match" for item in comments)
+    assert not any("Tercos (1931)" in (item.suggested_fix or "") for item in comments)
+
+
+def test_normalize_batch_comments_discards_reference_citation_match_on_caption_like_paragraph():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="citation_match",
+            message="Esta citacao no corpo do texto nao tem correspondencia clara na lista de referencias.",
+            paragraph_index=0,
+            issue_excerpt="Tercos (1931)",
+            suggested_fix="Incluir ou revisar a referencia correspondente a Tercos (1931) na lista final.",
+        )
+    ]
+    chunks = ["Figura 1\nFormulario da Relacao Anual de Empregados - Lei dos Dois Tercos (1931)"]
+    refs = ["paragrafo 1 | tipo=paragraph | estilo=Normal"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_reference_scope_does_not_treat_numbered_subheading_as_citation_when_block_is_paragraph():
+    chunks = [
+        "2.1.3 o FGTS (1966)",
+        "O Fundo de Garantia do Tempo de Serviço foi instituído pela Lei 5.107, de 13 de setembro de 1966, e regulamentado logo depois.",
+        "Referencias",
+        "SILVA, Joao. Estudo historico. Brasilia: Ipea, 1993.",
+    ]
+    refs = [
+        "paragrafo 1 | tipo=paragraph | estilo=Normal",
+        "paragrafo 2 | tipo=paragraph | estilo=Normal",
+        "paragrafo 3 | tipo=reference_heading",
+        "paragrafo 4 | tipo=reference_entry",
+    ]
+
+    indexes = graph_chat_module._find_reference_citation_indexes(chunks, refs, body_limit=2)
+    comments = graph_chat_module._heuristic_reference_global_comments(chunks, refs, batch_indexes=[0, 1, 2, 3])
+
+    assert 0 not in indexes
+    assert not any(item.category == "citation_match" and item.paragraph_index == 0 for item in comments)
+    assert not any("FGTS (1966)" in (item.suggested_fix or "") for item in comments)
+
+
+def test_normalize_batch_comments_discards_reference_citation_match_on_numbered_subheading():
+    comments = [
+        AgentComment(
+            agent="referencias",
+            category="citation_match",
+            message="Esta citacao no corpo do texto nao tem correspondencia clara na lista de referencias.",
+            paragraph_index=0,
+            issue_excerpt="FGTS (1966)",
+            suggested_fix="Incluir ou revisar a referencia correspondente a FGTS (1966) na lista final.",
+        )
+    ]
+    chunks = [
+        "2.1.3 o FGTS (1966)",
+        "O Fundo de Garantia do Tempo de Serviço foi instituído pela Lei 5.107, de 13 de setembro de 1966, e regulamentado logo depois.",
+    ]
+    refs = [
+        "paragrafo 1 | tipo=paragraph | estilo=Normal",
+        "paragrafo 2 | tipo=paragraph | estilo=Normal",
+    ]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="referencias",
+        batch_indexes=[0, 1],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
+def test_apply_comments_to_docx_matches_issue_excerpt_with_accent_insensitive_anchor(tmp_path):
+    docx_path = tmp_path / "mini_anchor_fuzzy.docx"
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>"""
+    root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    document = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r><w:t>Os atendimentos em grupos se justificam ainda pelas evidências disponíveis.</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:styles>"""
+
+    with ZipFile(docx_path, "w", compression=ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("word/document.xml", document)
+        zf.writestr("word/_rels/document.xml.rels", root_rels.replace("officeDocument", "comments"))
+        zf.writestr("word/styles.xml", styles)
+
+    output_bytes = apply_comments_to_docx(
+        docx_path,
+        [
+            AgentComment(
+                agent="gramatica_ortografia",
+                category="Concordância",
+                message="Ajustar trecho.",
+                paragraph_index=0,
+                issue_excerpt="pelas evidencias disponiveis",
+                suggested_fix="pelas evidências adequadas",
+            )
+        ],
+    )
+
+    out_path = tmp_path / "resultado_anchor_fuzzy.docx"
+    out_path.write_bytes(output_bytes)
+
+    with ZipFile(out_path, "r") as zf:
+        document_xml = zf.read("word/document.xml")
+
+    root = etree.fromstring(document_xml)
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    highlights = root.findall(".//w:highlight", ns)
+
+    assert any(node.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") == "yellow" for node in highlights)
+
+
+def test_extract_docx_user_comments_reads_existing_comment_anchor(tmp_path):
+    docx_path = tmp_path / "mini_existing_comment.docx"
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>
+</Types>"""
+    root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    document_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>
+</Relationships>"""
+    document = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r><w:t>O texto menciona Walker e Oliveira, 1991, mas não apresenta a referência final.</w:t></w:r>
+      <w:commentRangeStart w:id="0"/>
+      <w:r><w:t>Walker e Oliveira, 1991</w:t></w:r>
+      <w:commentRangeEnd w:id="0"/>
+      <w:r><w:commentReference w:id="0"/></w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    comments = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="0" w:author="Editor">
+    <w:p><w:r><w:t>Procure a referência desta citação e inclua na lista final.</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>"""
+    styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:styles>"""
+
+    with ZipFile(docx_path, "w", compression=ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("word/document.xml", document)
+        zf.writestr("word/_rels/document.xml.rels", document_rels)
+        zf.writestr("word/comments.xml", comments)
+        zf.writestr("word/styles.xml", styles)
+
+    items = extract_docx_user_comments(docx_path)
+
+    assert len(items) == 1
+    assert items[0].comment_id == 0
+    assert items[0].paragraph_index == 0
+    assert items[0].anchor_excerpt == "Walker e Oliveira, 1991"
+    assert "inclua na lista final" in items[0].text
+
+
+def test_build_reference_search_requests_requires_explicit_request():
+    comments = [
+        DocumentUserComment(
+            comment_id=1,
+            author="Editor",
+            text="Procure a referência desta citação e inclua na lista final.",
+            paragraph_index=12,
+            anchor_excerpt="Walker e Oliveira, 1991",
+            paragraph_text="O texto menciona Walker e Oliveira, 1991, mas não apresenta a referência final.",
+        ),
+        DocumentUserComment(
+            comment_id=2,
+            author="Editor",
+            text="Ajustar redação deste trecho.",
+            paragraph_index=13,
+            anchor_excerpt="ajustar redação",
+            paragraph_text="Outro parágrafo qualquer.",
+        ),
+    ]
+
+    requests = build_reference_search_requests(comments)
+
+    assert len(requests) == 1
+    assert requests[0].paragraph_index == 12
+    assert "Walker e Oliveira, 1991" in requests[0].query_text
+
+
+def test_run_user_reference_agent_skips_when_reference_already_exists(monkeypatch):
+    prepared = graph_chat_module.prepare_review_batches(
+        paragraphs=["Walker e Oliveira, 1991.", "Referências", "WALKER, J.; OLIVEIRA, F. Título. Revista X, 1991."],
+        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=reference_heading", "parágrafo 3 | tipo=reference_entry"],
+        sections=[Section(title="Texto", start_idx=0, end_idx=0), Section(title="Referências", start_idx=1, end_idx=2)],
+        selected_agents=["comentarios_usuario_referencias"],
+        user_comments=[
+            DocumentUserComment(
+                comment_id=7,
+                author="Editor",
+                text="Procure a referência desta citação e inclua na lista final.",
+                paragraph_index=0,
+                anchor_excerpt="Walker e Oliveira, 1991",
+                paragraph_text="Walker e Oliveira, 1991.",
+            )
+        ],
+    )
+
+    from editorial_docx.user_comment_refs import ReferenceCandidate
+
+    monkeypatch.setattr(
+        graph_chat_module,
+        "search_reference_candidates",
+        lambda request: [
+            ReferenceCandidate(
+                title="Título",
+                authors=["WALKER, J.", "OLIVEIRA, F."],
+                year="1991",
+                container_title="Revista X",
+                volume="",
+                issue="",
+                page="",
+                publisher="",
+                doi="",
+                url="",
+                entry_type="journal-article",
+                score=10.0,
+            )
+        ],
+    )
+
+    comments, decisions = graph_chat_module._run_user_reference_agent(
+        prepared_document=prepared,
+        question="Revise",
+        profile_key="GENERIC",
+        existing_comments=[],
+    )
+
+    assert comments == []
+    assert decisions == []
+
+
+def test_apply_comments_to_docx_inserts_reference_from_user_comment_agent(tmp_path):
+    docx_path = tmp_path / "mini_insert_reference.docx"
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>"""
+    root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    document = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Walker e Oliveira, 1991.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Referências</w:t></w:r></w:p>
+    <w:p><w:r><w:t>SILVA, J. Obra anterior. Brasília: Ipea, 1980.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+    styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:styles>"""
+
+    with ZipFile(docx_path, "w", compression=ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("word/document.xml", document)
+        zf.writestr("word/_rels/document.xml.rels", root_rels.replace("officeDocument", "comments"))
+        zf.writestr("word/styles.xml", styles)
+
+    output_bytes = apply_comments_to_docx(
+        docx_path,
+        [
+            AgentComment(
+                agent="comentarios_usuario_referencias",
+                category="user_reference_request",
+                message="Referência localizada e anexada por solicitação registrada em comentário do usuário.",
+                paragraph_index=0,
+                issue_excerpt="Walker e Oliveira, 1991",
+                suggested_fix="WALKER, J.; OLIVEIRA, F. Título. Revista X, 1991.",
+                auto_apply=True,
+                format_spec="action=insert_reference;insert_after=2;source_comment_id=7",
+            )
+        ],
+    )
+
+    out_path = tmp_path / "resultado_insert_reference.docx"
+    out_path.write_bytes(output_bytes)
+
+    with ZipFile(out_path, "r") as zf:
+        document_xml = zf.read("word/document.xml").decode("utf-8")
+        comments_xml = zf.read("word/comments.xml").decode("utf-8")
+
+    assert "WALKER, J.; OLIVEIRA, F. Título. Revista X, 1991." in document_xml
+    assert "comentário do usuário" in comments_xml
 

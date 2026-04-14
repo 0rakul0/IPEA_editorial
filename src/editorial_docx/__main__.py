@@ -59,19 +59,30 @@ def main() -> int:
         default=None,
         help="Caminho do relatório JSON (padrão: <entrada>_output.relatorio.json).",
     )
+    parser.add_argument(
+        "--output-normalized-json",
+        type=Path,
+        default=None,
+        help="Caminho do artefato normalized_document.json (padrão: <entrada>_normalized_document.json).",
+    )
     args = parser.parse_args()
 
     loaded = load_document(args.input)
+    base = args.input.with_suffix("")
+    output_normalized_json = args.output_normalized_json or base.parent / f"{base.name}_normalized_document.json"
+    normalized_text = loaded.normalized_document.to_json()
+    output_normalized_json.write_text(normalized_text, encoding="utf-8")
+    history_normalized = _write_history_snapshot(output_normalized_json, normalized_text)
     result = run_conversation(
         paragraphs=loaded.chunks,
         refs=loaded.refs,
         sections=loaded.sections,
+        user_comments=loaded.user_comments,
         question=args.question,
         selected_agents=AGENT_ORDER.copy(),
     )
     visible_comments = result.comments[:]
 
-    base = args.input.with_suffix("")
     model_tag = get_llm_model_tag()
     output_json = args.output_json or base.parent / f"{base.name}_output_{model_tag}.relatorio.json"
     json_text = json.dumps(
@@ -92,6 +103,8 @@ def main() -> int:
 
     print(f"Relatório JSON: {output_json}")
     print(f"Histórico JSON: {history_json}")
+    print(f"Normalized JSON: {output_normalized_json}")
+    print(f"Histórico normalized JSON: {history_normalized}")
     print(f"Comentários visíveis: {len(visible_comments)}")
     print(
         "Camada verificadora: "

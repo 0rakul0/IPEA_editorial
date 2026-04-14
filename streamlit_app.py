@@ -13,7 +13,7 @@ from typing import Callable
 import streamlit as st
 
 from src.editorial_docx.docx_utils import apply_comments_to_docx
-from src.editorial_docx.document_loader import load_document
+from src.editorial_docx.document_loader import load_document, load_normalized_document
 from src.editorial_docx.graph_chat import run_conversation
 from src.editorial_docx.llm import get_llm_config, get_llm_model_tag
 from src.editorial_docx.models import AgentComment, agent_short_label
@@ -27,6 +27,7 @@ AGENT_LABELS = {
     "sinopse_abstract": "Sinopse/Abstract",
     "estrutura": "Estrutura",
     "tabelas_figuras": "Tabelas/Figuras",
+    "comentarios_usuario_referencias": "Comentários do Usuário/Referências",
     "referencias": "Referências",
     "gramatica_ortografia": "Gramática/Ortografia",
     "tipografia": "Tipografia",
@@ -114,6 +115,9 @@ for key, default in {
     "doc_profile": "GENERIC",
     "sections": [],
     "toc": [],
+    "user_comments": [],
+    "normalized_json_text": "",
+    "normalized_json_path": None,
     "selected_comment_row": 0,
     "correction_state": {},
     "comments_signature": "",
@@ -455,13 +459,36 @@ def _run_review(
         st.session_state.refs,
         st.session_state.sections,
         question,
+        user_comments=st.session_state.user_comments,
         profile_key=st.session_state.doc_profile,
         **kwargs,
     )
     return result.answer, result.comments, logs
 
 
+def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: bytes = b"", doc_path: Path | None = None) -> None:
+    st.session_state.messages = []
+    st.session_state.comments = []
+    st.session_state.agent_result_cache = {}
+    st.session_state.selected_comment_row = 0
+    st.session_state.correction_state = {}
+    st.session_state.comments_signature = ""
+    st.session_state.doc_path = doc_path
+    st.session_state.doc_bytes = file_bytes
+    st.session_state.doc_fingerprint = file_fingerprint
+    st.session_state.paragraphs = loaded.chunks
+    st.session_state.refs = loaded.refs
+    st.session_state.sections = loaded.sections
+    st.session_state.toc = loaded.toc
+    st.session_state.user_comments = loaded.user_comments
+    st.session_state.doc_kind = loaded.kind
+    st.session_state.normalized_json_text = loaded.normalized_document.to_json()
+    st.session_state.normalized_json_path = loaded.source_path
+
+
 uploaded = st.file_uploader("Ingestão do documento (.docx ou .pdf)", type=["docx", "pdf"])
+uploaded_normalized = st.file_uploader("Reaproveitar normalized_document.json", type=["json"])
+
 if uploaded is not None:
     file_bytes = uploaded.getvalue()
     file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
@@ -469,29 +496,62 @@ if uploaded is not None:
     st.session_state.doc_profile = profile.key
 
     if st.session_state.doc_fingerprint != file_fingerprint:
-        st.session_state.messages = []
-        st.session_state.comments = []
-        st.session_state.agent_result_cache = {}
-        st.session_state.selected_comment_row = 0
-        st.session_state.correction_state = {}
-        st.session_state.comments_signature = ""
-
         tmp_dir = Path(".tmp")
         tmp_dir.mkdir(exist_ok=True)
         doc_path = tmp_dir / uploaded.name
         doc_path.write_bytes(file_bytes)
 
         loaded = load_document(doc_path)
-        st.session_state.doc_path = doc_path
-        st.session_state.doc_bytes = file_bytes
-        st.session_state.doc_fingerprint = file_fingerprint
-        st.session_state.paragraphs = loaded.chunks
-        st.session_state.refs = loaded.refs
-        st.session_state.sections = loaded.sections
-        st.session_state.toc = loaded.toc
-        st.session_state.doc_kind = loaded.kind
+        normalized_path = tmp_dir / f"{doc_path.stem}_normalized_document.json"
+        normalized_path.write_text(loaded.normalized_document.to_json(), encoding="utf-8")
+        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=file_bytes, doc_path=doc_path)
+        st.session_state.normalized_json_path = normalized_path
+
+elif uploaded_normalized is not None:
+    file_bytes = uploaded_normalized.getvalue()
+    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
+    if st.session_state.doc_fingerprint != file_fingerprint:
+        tmp_dir = Path(".tmp")
+        tmp_dir.mkdir(exist_ok=True)
+        normalized_path = tmp_dir / uploaded_normalized.name
+        normalized_path.write_bytes(file_bytes)
+        loaded = load_normalized_document(normalized_path)
+        st.session_state.doc_profile = "GENERIC"
+        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
+        st.session_state.normalized_json_path = normalized_path
 
 col_chat, col_fix = st.columns([1.7, 1.1], gap="large")
+
+if st.session_state.normalized_json_text:
+    normalized_payload = json.loads(st.session_state.normalized_json_text)
+    metadata = normalized_payload.get("metadata") or {}
+    with st.expander("Normalized Document", expanded=False):
+        meta_a, meta_b, meta_c, meta_d = st.columns(4)
+        meta_a.metric("Blocos", len(normalized_payload.get("blocks") or []))
+        meta_b.metric("Seções", len(normalized_payload.get("sections") or []))
+        meta_c.metric("Referências", len(normalized_payload.get("references") or []))
+        meta_d.metric("Comentários do usuário", len(normalized_payload.get("user_comments") or []))
+        st.caption(
+            f"Origem: `{metadata.get('input_path', '')}` | tipo: `{metadata.get('kind', '')}` | "
+            f"gerado em: `{metadata.get('generated_at', '')}`"
+        )
+        if st.session_state.normalized_json_path:
+            st.caption(f"Artefato atual: `{st.session_state.normalized_json_path}`")
+        st.download_button(
+            label="Baixar normalized_document.json",
+            data=st.session_state.normalized_json_text,
+            file_name=(
+                f"{Path(st.session_state.normalized_json_path).stem if st.session_state.normalized_json_path else 'normalized_document'}.json"
+            ),
+            mime="application/json",
+        )
+        st.json(
+            {
+                "metadata": metadata,
+                "toc": normalized_payload.get("toc") or [],
+            },
+            expanded=False,
+        )
 
 with col_chat:
     st.subheader("Chat")
