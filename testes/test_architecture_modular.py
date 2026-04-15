@@ -59,18 +59,25 @@ def test_chunk_index_windows_keeps_overlap_between_batches():
     assert batches[0][-1] == batches[1][0]
 
 
-def test_prepare_review_document_batches_grammar_by_single_paragraph():
+def test_prepare_review_document_batches_grammar_by_micro_batches():
     from editorial_docx.review_context import prepare_review_document
 
     prepared = prepare_review_document(
-        chunks=["Parágrafo A.", "Parágrafo B.", "Parágrafo C."],
-        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=paragraph", "parágrafo 3 | tipo=paragraph"],
+        chunks=["Parágrafo A.", "Parágrafo B.", "Parágrafo C.", "Parágrafo D.", "Parágrafo E.", "Parágrafo F."],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=paragraph",
+            "parágrafo 3 | tipo=paragraph",
+            "parágrafo 4 | tipo=paragraph",
+            "parágrafo 5 | tipo=paragraph",
+            "parágrafo 6 | tipo=paragraph",
+        ],
         sections=[],
         agent_order=["gramatica_ortografia"],
-        agent_scope_builder=lambda agent, chunks, refs, sections: [0, 1, 2],
+        agent_scope_builder=lambda agent, chunks, refs, sections: [0, 1, 2, 3, 4, 5],
     )
 
-    assert [batch.indexes for batch in prepared.agent_batches["gramatica_ortografia"]] == [[0], [1], [2]]
+    assert [batch.indexes for batch in prepared.agent_batches["gramatica_ortografia"]] == [[0, 1, 2, 3], [3, 4, 5]]
 
 
 def test_agent_scope_indexes_grammar_uses_only_body_paragraphs_before_references():

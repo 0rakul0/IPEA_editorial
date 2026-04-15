@@ -1497,8 +1497,20 @@ def test_run_conversation_continues_next_batch_after_connection_failure(monkeypa
     monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
 
     result = run_conversation(
-        paragraphs=["Primeiro parágrafo.", "O texto passou ser revisado."],
-        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=paragraph"],
+        paragraphs=[
+            "Primeiro parágrafo.",
+            "Segundo parágrafo.",
+            "Terceiro parágrafo.",
+            "Quarto parágrafo.",
+            "O texto passou ser revisado.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=paragraph",
+            "parágrafo 3 | tipo=paragraph",
+            "parágrafo 4 | tipo=paragraph",
+            "parágrafo 5 | tipo=paragraph",
+        ],
         sections=[],
         question="Revise",
         selected_agents=["gramatica_ortografia"],
@@ -1554,8 +1566,22 @@ def test_run_conversation_parallelizes_grammar_batches_with_low_concurrency(monk
     monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
 
     result = run_conversation(
-        paragraphs=["Parágrafo com erro 0.", "Parágrafo com erro 1.", "Parágrafo com erro 2."],
-        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=paragraph", "parágrafo 3 | tipo=paragraph"],
+        paragraphs=[
+            "Parágrafo com erro 0.",
+            "Parágrafo com erro 1.",
+            "Parágrafo com erro 2.",
+            "Parágrafo com erro 3.",
+            "Parágrafo com erro 4.",
+            "Parágrafo com erro 5.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=paragraph",
+            "parágrafo 3 | tipo=paragraph",
+            "parágrafo 4 | tipo=paragraph",
+            "parágrafo 5 | tipo=paragraph",
+            "parágrafo 6 | tipo=paragraph",
+        ],
         sections=[],
         question="Revise",
         selected_agents=["gramatica_ortografia"],
@@ -1563,8 +1589,8 @@ def test_run_conversation_parallelizes_grammar_batches_with_low_concurrency(monk
 
     trace = next(item for item in result.trace.agents if item.agent == "gramatica_ortografia")
     assert state["max_active"] >= 2
-    assert len(trace.batches) == 3
-    assert trace.llm_raw_comment_count == 3
+    assert len(trace.batches) == 2
+    assert trace.llm_raw_comment_count == 2
 
 
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():

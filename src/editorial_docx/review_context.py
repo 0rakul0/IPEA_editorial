@@ -7,6 +7,9 @@ from .document_loader import Section
 from .models import DocumentUserComment
 from .token_utils import TokenChunkConfig, chunk_index_windows
 
+_GRAMMAR_BATCH_SIZE = 4
+_GRAMMAR_BATCH_OVERLAP = 1
+
 
 @dataclass(slots=True)
 class ReviewBatch:
@@ -59,7 +62,19 @@ def _build_agent_batches(
     max_chunks: int,
 ) -> list[list[int]]:
     if agent == "gramatica_ortografia":
-        return [[idx] for idx in indexes if 0 <= idx < len(chunks)]
+        filtered = [idx for idx in indexes if 0 <= idx < len(chunks)]
+        if not filtered:
+            return []
+        batches: list[list[int]] = []
+        step = max(1, _GRAMMAR_BATCH_SIZE - _GRAMMAR_BATCH_OVERLAP)
+        for start in range(0, len(filtered), step):
+            batch = filtered[start : start + _GRAMMAR_BATCH_SIZE]
+            if not batch:
+                continue
+            batches.append(batch)
+            if start + _GRAMMAR_BATCH_SIZE >= len(filtered):
+                break
+        return batches
     return _build_batches(
         chunks=chunks,
         refs=refs,
