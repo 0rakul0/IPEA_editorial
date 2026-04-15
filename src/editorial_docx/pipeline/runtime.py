@@ -243,9 +243,10 @@ def _update_running_summary(
     running_summary: str,
     batch: ReviewBatch,
     accepted_comments: list[AgentComment],
+    use_llm: bool = True,
 ) -> str:
     fallback = _deterministic_progressive_summary(agent, running_summary, batch, accepted_comments)
-    if agent == "gramatica_ortografia" or get_chat_model() is None:
+    if not use_llm or agent == "gramatica_ortografia" or get_chat_model() is None:
         return fallback
 
     prompt = ChatPromptTemplate.from_messages(

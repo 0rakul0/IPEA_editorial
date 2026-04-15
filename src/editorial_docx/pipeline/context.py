@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..config import (
+    DEFAULT_REVIEW_FOCUS_EXCERPT_MAX_CHARS,
     DEFAULT_REVIEW_MAX_BATCH_CHARS,
     DEFAULT_REVIEW_MAX_BATCH_CHUNKS,
     DEFAULT_REVIEW_WINDOW_RADIUS,
+    DEFAULT_REVIEW_WINDOW_EXCERPT_MAX_CHARS,
     GRAMMAR_BATCH_OVERLAP,
     GRAMMAR_BATCH_SIZE,
 )
@@ -122,6 +124,8 @@ def prepare_review_document(
     max_batch_chars: int = DEFAULT_REVIEW_MAX_BATCH_CHARS,
     max_batch_chunks: int = DEFAULT_REVIEW_MAX_BATCH_CHUNKS,
     window_radius: int = DEFAULT_REVIEW_WINDOW_RADIUS,
+    focus_excerpt_max_chars: int = DEFAULT_REVIEW_FOCUS_EXCERPT_MAX_CHARS,
+    window_excerpt_max_chars: int = DEFAULT_REVIEW_WINDOW_EXCERPT_MAX_CHARS,
 ) -> PreparedReviewDocument:
     """Prepara lotes, janelas de contexto e TOC para todos os agentes."""
     toc = [f"{section.title} [{section.start_idx}-{section.end_idx}]" for section in sections]
@@ -146,12 +150,17 @@ def prepare_review_document(
         prepared.agent_batches[agent] = [
             ReviewBatch(
                 indexes=batch_indexes,
-                focus_excerpt=build_excerpt(indexes=batch_indexes, chunks=chunks, refs=refs, max_chars=1_000_000),
+                focus_excerpt=build_excerpt(
+                    indexes=batch_indexes,
+                    chunks=chunks,
+                    refs=refs,
+                    max_chars=focus_excerpt_max_chars,
+                ),
                 window_excerpt=build_excerpt(
                     indexes=_window_indexes(batch_indexes, total=len(chunks), radius=window_radius),
                     chunks=chunks,
                     refs=refs,
-                    max_chars=1_000_000,
+                    max_chars=window_excerpt_max_chars,
                 ),
                 headings=_headings_for_batch(sections, batch_indexes),
                 start_idx=batch_indexes[0],

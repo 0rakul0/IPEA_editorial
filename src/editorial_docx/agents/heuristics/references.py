@@ -133,6 +133,19 @@ def probable_reference_match_comment(match: ProbableReferenceMatch) -> AgentComm
             ),
         )
 
+    if match.match_type == "partial_author_conflict":
+        return AgentComment(
+            agent="referencias",
+            category="citation_match",
+            paragraph_index=citation.paragraph_index,
+            message="A citação tem correspondência parcial com a lista final, mas a autoria não coincide integralmente.",
+            issue_excerpt=citation.excerpt,
+            suggested_fix=(
+                f"Conferir {citation.label} no corpo do texto com `{reference.label}` na lista final: "
+                "há sobreposição parcial de autoria, mas pelo menos um autor ou o ano diverge."
+            ),
+        )
+
     return AgentComment(
         agent="referencias",
         category="citation_match",

@@ -206,7 +206,8 @@ def test_extract_citation_candidates_reads_body_before_matching():
         is_non_body_context=lambda ref, chunk, **kwargs: False,
     )
 
-    assert [item.label for item in candidates] == ["De Negri (2001)", "Walker (1991)"]
+    assert [item.label for item in candidates] == ["De Negri (2001)", "Walker e Oliveira (1991)"]
+    assert candidates[1].author_keys == ("walker", "oliveira")
 
 
 def test_compare_citations_to_references_matches_casefolded_author_keys():
@@ -224,6 +225,26 @@ def test_compare_citations_to_references_matches_casefolded_author_keys():
 
     assert result.missing_citations == ()
     assert result.uncited_references == ()
+
+
+def test_compare_citations_to_references_marks_partial_multi_author_conflict():
+    citations = extract_citation_candidates(
+        chunks=["No início dos anos 1990, Walker e Oliveira (1991) reportaram que a RAIS avançou.", "Referências"],
+        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=reference_heading"],
+        body_limit=1,
+        is_non_body_context=lambda ref, chunk, **kwargs: False,
+    )
+    parsed = parse_reference_entry(
+        "ARIAS, O.; OLIVEIRA, C. Inventario de informacion estadistica de periodo post censal. CEPAL, 1973/75."
+    )
+
+    result = compare_citations_to_references(citations, [parsed] if parsed is not None else [])
+
+    assert result.missing_citations == ()
+    assert len(result.probable_matches) == 1
+    assert result.probable_matches[0].match_type == "partial_author_conflict"
+    assert result.probable_matches[0].citation.label == "Walker e Oliveira (1991)"
+    assert result.probable_matches[0].reference.label == "ARIAS e OLIVEIRA (1973/75)"
 
 
 def test_compare_citations_to_references_marks_probable_year_mismatch_instead_of_missing():

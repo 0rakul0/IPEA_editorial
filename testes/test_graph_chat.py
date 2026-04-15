@@ -2368,6 +2368,33 @@ def test_normalize_batch_comments_matches_parenthetical_multi_author_reference_c
     assert all(item.category != "citation_match" for item in normalized)
 
 
+def test_normalize_batch_comments_flags_partial_multi_author_conflict_instead_of_missing_reference():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "No início dos anos 1990, Walker e Oliveira (1991) reportaram que a RAIS cobria 1 milhão de estabelecimentos.",
+            "Referências",
+            "ARIAS, O.; OLIVEIRA, C. Inventario de informacion estadistica de periodo post censal. CEPAL, 1973/75.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert any(
+        item.category == "citation_match"
+        and item.issue_excerpt == "Walker e Oliveira (1991)"
+        and "correspondência parcial" in item.message
+        and "ARIAS e OLIVEIRA (1973/75)" in item.suggested_fix
+        for item in normalized
+    )
+    assert not any("Incluir ou revisar a referência correspondente a Oliveira (1991)" in (item.suggested_fix or "") for item in normalized)
+
+
 def test_normalize_batch_comments_matches_reference_with_particle_surname():
     normalized = _normalize_batch_comments(
         comments=[],
