@@ -90,6 +90,57 @@ def _connection_error_summary(exc: Exception) -> str:
     return "falha de conexão com a LLM"
 
 
+def _is_quota_or_rate_limit_error(exc: Exception) -> bool:
+    quota_tokens = {
+        "insufficient_quota",
+        "rate limit",
+        "ratelimit",
+        "quota",
+        "too many requests",
+        "error code: 429",
+    }
+    for item in _iter_exception_chain(exc):
+        msg = str(item).lower()
+        if any(token in msg for token in quota_tokens):
+            return True
+    return False
+
+
+def _quota_or_rate_limit_summary(exc: Exception) -> str:
+    messages: list[str] = []
+    for item in _iter_exception_chain(exc):
+        msg = str(item).strip()
+        if msg:
+            messages.append(msg)
+    for msg in messages:
+        lowered = msg.lower()
+        if "insufficient_quota" in lowered:
+            return "cota esgotada (`insufficient_quota`)"
+        if "rate limit" in lowered or "too many requests" in lowered or "error code: 429" in lowered:
+            return msg
+    if messages:
+        return messages[-1]
+    return "limite da API atingido"
+
+
+def _classify_llm_failure(exc: Exception) -> tuple[str, str]:
+    if _is_connection_error(exc):
+        return "connection", _connection_error_summary(exc)
+    if _is_quota_or_rate_limit_error(exc):
+        return "quota/rate limit", _quota_or_rate_limit_summary(exc)
+    if _is_json_body_error(exc):
+        return "json/payload", "falha ao montar ou interpretar o payload/json da LLM"
+
+    messages: list[str] = []
+    for item in _iter_exception_chain(exc):
+        msg = str(item).strip()
+        if msg:
+            messages.append(msg)
+    if messages:
+        return "unknown", messages[-1]
+    return "unknown", exc.__class__.__name__
+
+
 def _invoke_with_retry(runnable, payload: dict[str, str], operation: str):
     retry_config = get_llm_retry_config()
     max_retries = int(retry_config["max_retries"])
@@ -261,6 +312,31 @@ def _invoke_with_model_fallback(prompt, payload: dict[str, str], operation: str)
                 raise
             last_exc = exc
             continue
+    if last_exc is not None:
+        raise last_exc
+    return None
+
+
+def _invoke_coordinator_with_retry(prompt, payload: dict[str, str]):
+    retry_config = get_llm_retry_config()
+    max_retries = int(retry_config["max_retries"])
+    backoff_seconds = float(retry_config["backoff_seconds"])
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = _invoke_with_model_fallback(prompt, payload, operation="coordenador")
+            if response is not None:
+                return response
+            last_exc = RuntimeError("coordenador não retornou resposta")
+        except Exception as exc:
+            last_exc = exc
+
+        if attempt >= max_retries:
+            break
+        if backoff_seconds > 0:
+            time.sleep(backoff_seconds * (2 ** (attempt - 1)))
+
     if last_exc is not None:
         raise last_exc
     return None
@@ -444,16 +520,15 @@ def build_coordinator_answer(question: str, comments: list[AgentComment]) -> str
         "comments_json": _sanitize_for_llm(_serialize_comments(comments)),
     }
     try:
-        response = _invoke_with_model_fallback(prompt, payload, operation="coordenador")
+        response = _invoke_coordinator_with_retry(prompt, payload)
         if response is None:
             return _partial_answer_from_comments(comments, "Resumo dos agentes.")
-    except LLMConnectionFailure as exc:
+    except Exception as exc:
+        category, detail = _classify_llm_failure(exc)
         return _partial_answer_from_comments(
             comments,
-            f"Resumo dos agentes (coordenador indisponível por conexão: {_connection_error_summary(exc.original)}).",
+            f"Resumo dos agentes (coordenador indisponível por {category}: {detail}).",
         )
-    except Exception:
-        return _partial_answer_from_comments(comments, "Resumo dos agentes (coordenador indisponível).")
 
     answer = response.content if isinstance(response.content, str) else str(response.content)
     return answer.strip() or _partial_answer_from_comments(comments, "Resumo dos agentes.")
@@ -463,12 +538,15 @@ __all__ = [
     "LLMConnectionFailure",
     "_build_batch_review_excerpt",
     "_comment_memory_lines",
+    "_classify_llm_failure",
     "_connection_error_summary",
     "_deterministic_progressive_summary",
+    "_invoke_coordinator_with_retry",
     "_invoke_with_model_fallback",
     "_invoke_with_retry",
     "_is_connection_error",
     "_is_json_body_error",
+    "_is_quota_or_rate_limit_error",
     "_parse_comment_reviews",
     "_parse_comments",
     "_parse_comments_with_status",

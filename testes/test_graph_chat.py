@@ -9,6 +9,7 @@ from lxml import etree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import editorial_docx.graph_chat as graph_chat_module
+import editorial_docx.review_runtime as review_runtime_module
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
 from editorial_docx.document_loader import Section
@@ -28,6 +29,7 @@ from editorial_docx.graph_chat import (
 from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, agent_short_label
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
+from editorial_docx.review_runtime import LLMConnectionFailure, build_coordinator_answer
 from editorial_docx.user_comment_refs import build_reference_search_requests
 
 
@@ -76,6 +78,101 @@ def test_parse_comments_accepts_wrapped_comments_key():
 
 def test_parse_comments_returns_empty_list_for_empty_payload():
     assert _parse_comments("", agent="gramatica_ortografia") == []
+
+
+def test_build_coordinator_answer_retries_and_succeeds_after_transient_failure(monkeypatch):
+    attempts = {"count": 0}
+
+    class FakeResponse:
+        content = "Síntese final consolidada."
+
+    monkeypatch.setattr(review_runtime_module, "get_chat_model", lambda: object())
+    monkeypatch.setattr(review_runtime_module, "get_llm_retry_config", lambda: {"max_retries": 3, "backoff_seconds": 0.0})
+
+    def fake_invoke(prompt, payload, operation):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("falha temporária")
+        return FakeResponse()
+
+    monkeypatch.setattr(review_runtime_module, "_invoke_with_model_fallback", fake_invoke)
+
+    answer = build_coordinator_answer(
+        question="Resuma",
+        comments=[AgentComment(agent="tipografia", category="heading", message="Ajustar título.")],
+    )
+
+    assert attempts["count"] == 3
+    assert answer == "Síntese final consolidada."
+
+
+def test_build_coordinator_answer_classifies_connection_failure(monkeypatch):
+    monkeypatch.setattr(review_runtime_module, "get_chat_model", lambda: object())
+    monkeypatch.setattr(
+        review_runtime_module,
+        "_invoke_coordinator_with_retry",
+        lambda prompt, payload: (_ for _ in ()).throw(
+            LLMConnectionFailure("coordenador", 3, RuntimeError("getaddrinfo failed"))
+        ),
+    )
+
+    answer = build_coordinator_answer(
+        question="Resuma",
+        comments=[AgentComment(agent="tipografia", category="heading", message="Ajustar título.")],
+    )
+
+    assert "coordenador indisponível por connection" in answer
+    assert "getaddrinfo failed" in answer
+
+
+def test_build_coordinator_answer_classifies_quota_rate_limit_failure(monkeypatch):
+    monkeypatch.setattr(review_runtime_module, "get_chat_model", lambda: object())
+    monkeypatch.setattr(
+        review_runtime_module,
+        "_invoke_coordinator_with_retry",
+        lambda prompt, payload: (_ for _ in ()).throw(RuntimeError("Error code: 429 - insufficient_quota")),
+    )
+
+    answer = build_coordinator_answer(
+        question="Resuma",
+        comments=[AgentComment(agent="tipografia", category="heading", message="Ajustar título.")],
+    )
+
+    assert "coordenador indisponível por quota/rate limit" in answer
+    assert "insufficient_quota" in answer
+
+
+def test_build_coordinator_answer_classifies_json_payload_failure(monkeypatch):
+    monkeypatch.setattr(review_runtime_module, "get_chat_model", lambda: object())
+    monkeypatch.setattr(
+        review_runtime_module,
+        "_invoke_coordinator_with_retry",
+        lambda prompt, payload: (_ for _ in ()).throw(RuntimeError("Could not parse the JSON body of your request")),
+    )
+
+    answer = build_coordinator_answer(
+        question="Resuma",
+        comments=[AgentComment(agent="tipografia", category="heading", message="Ajustar título.")],
+    )
+
+    assert "coordenador indisponível por json/payload" in answer
+
+
+def test_build_coordinator_answer_classifies_unknown_failure(monkeypatch):
+    monkeypatch.setattr(review_runtime_module, "get_chat_model", lambda: object())
+    monkeypatch.setattr(
+        review_runtime_module,
+        "_invoke_coordinator_with_retry",
+        lambda prompt, payload: (_ for _ in ()).throw(RuntimeError("falha inesperada qualquer")),
+    )
+
+    answer = build_coordinator_answer(
+        question="Resuma",
+        comments=[AgentComment(agent="tipografia", category="heading", message="Ajustar título.")],
+    )
+
+    assert "coordenador indisponível por unknown" in answer
+    assert "falha inesperada qualquer" in answer
 
 
 def test_parse_comments_ignores_tipografia_auto_apply_fields():
