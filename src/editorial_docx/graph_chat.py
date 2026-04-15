@@ -14,10 +14,10 @@ from .models import (
     VerificationDecision,
 )
 from .prompts import build_agent_prompt, build_comment_review_prompt
-from .review_coordinator import coordinate_answer
+from .pipeline.coordinator import coordinate_answer
 from .review_heuristics import _find_reference_citation_indexes, _heuristic_reference_comments, _heuristic_reference_global_comments
-from .review_orchestrator import _build_graph as _default_build_graph
-from .review_runtime import (
+from .pipeline.orchestrator import _build_graph as _default_build_graph
+from .pipeline.runtime import (
     LLMConnectionFailure,
     _build_batch_review_excerpt,
     _comment_memory_lines,
@@ -33,8 +33,8 @@ from .review_runtime import (
     _update_running_summary,
 )
 from .review_patterns import _folded_text
-from .review_scope import _agent_scope_indexes, _consolidate_final_comments, prepare_review_batches
-from .review_validation import _normalize_batch_comments, _summarize_verification, _verify_batch_comments, _format_batch_status
+from .pipeline.scope import _agent_scope_indexes, _consolidate_final_comments, prepare_review_batches
+from .pipeline.validation import _normalize_batch_comments, _summarize_verification, _verify_batch_comments, _format_batch_status
 from .user_comment_refs import (
     ReferenceSearchRequest,
     build_reference_search_requests,

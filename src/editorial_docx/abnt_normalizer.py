@@ -91,7 +91,11 @@ def is_plausible_reference_author(author_raw: str, extra_blocked_tokens: set[str
     return canonical_author_key(author_raw, extra_blocked_tokens=extra_blocked_tokens) is not None
 
 
-def canonical_reference_key(author_raw: str, year_raw: str, extra_blocked_tokens: set[str] | None = None) -> tuple[str, str] | None:
+def canonical_reference_key(
+    author_raw: str,
+    year_raw: str,
+    extra_blocked_tokens: set[str] | None = None,
+) -> tuple[str, str] | None:
     year = (year_raw or "").strip().casefold()
     if not year:
         return None
@@ -114,8 +118,8 @@ def publication_year_from_reference(text: str) -> str | None:
     if not source:
         return None
 
-    bibliographic_body = re.split(r"\b(?:Dispon[ií]vel em|Acesso em)\s*:", source, maxsplit=1, flags=re.IGNORECASE)[0]
-    first_entry = re.split(r"\.\s+(?=[A-ZÀ-Ý][A-ZÀ-Ý'’`\\-]+,\s)", bibliographic_body, maxsplit=1)[0]
+    bibliographic_body = re.split(r"\b(?:Dispon[iÃ­]vel em|Acesso em)\s*:", source, maxsplit=1, flags=re.IGNORECASE)[0]
+    first_entry = re.split(r"\.\s*(?=[A-Z][A-Z'`\-]+,\s)", bibliographic_body, maxsplit=1)[0]
     year_matches = re.findall(r"\b(?:19|20)\d{2}[a-z]?\b", first_entry, flags=re.IGNORECASE)
     if not year_matches:
         return None

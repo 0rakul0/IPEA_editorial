@@ -9,7 +9,7 @@ from lxml import etree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import editorial_docx.graph_chat as graph_chat_module
-import editorial_docx.review_runtime as review_runtime_module
+import editorial_docx.pipeline.runtime as review_runtime_module
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
 from editorial_docx.document_loader import Section
@@ -29,11 +29,15 @@ from editorial_docx.graph_chat import (
 from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, agent_short_label
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
-from editorial_docx.review_runtime import LLMConnectionFailure, build_coordinator_answer
+from editorial_docx.pipeline.runtime import LLMConnectionFailure, build_coordinator_answer
 from editorial_docx.user_comment_refs import build_reference_search_requests
 
 
-SAMPLE_DOCX = Path(__file__).resolve().parent / "234362_TD_3125_Benefícios coletivos (53 laudas).docx"
+_SAMPLE_DOCX_CANDIDATES = [
+    Path(__file__).resolve().parent / "234362_TD_3125_Benefícios coletivos (53 laudas).docx",
+    Path(__file__).resolve().parents[1] / "input_data" / "234362_TD_3125_Benefícios coletivos (53 laudas).docx",
+]
+SAMPLE_DOCX = next(path for path in _SAMPLE_DOCX_CANDIDATES if path.exists())
 
 
 def test_parse_comments_accepts_json_fenced_block():
@@ -82,6 +86,7 @@ def test_parse_comments_returns_empty_list_for_empty_payload():
 
 def test_build_coordinator_answer_retries_and_succeeds_after_transient_failure(monkeypatch):
     attempts = {"count": 0}
+    seen_payload = {}
 
     class FakeResponse:
         content = "Síntese final consolidada."
@@ -91,6 +96,7 @@ def test_build_coordinator_answer_retries_and_succeeds_after_transient_failure(m
 
     def fake_invoke(prompt, payload, operation):
         attempts["count"] += 1
+        seen_payload.update(payload)
         if attempts["count"] < 3:
             raise RuntimeError("falha temporária")
         return FakeResponse()
@@ -103,6 +109,9 @@ def test_build_coordinator_answer_retries_and_succeeds_after_transient_failure(m
     )
 
     assert attempts["count"] == 3
+    assert "document_excerpt" in seen_payload
+    assert "Ajustar título." in seen_payload["comments_json"]
+    assert seen_payload["document_excerpt"].strip()
     assert answer == "Síntese final consolidada."
 
 
@@ -2140,6 +2149,60 @@ def test_normalize_batch_comments_adds_reference_global_comment_for_citation_mis
     assert any(item.issue_excerpt == "Silva (2020)" for item in normalized)
 
 
+def test_normalize_batch_comments_flags_probable_reference_year_mismatch_instead_of_missing_reference():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "Como destaca Fraser (2001), a discussão articula redistribuição e reconhecimento.",
+            "Referências",
+            "FRASER, N. Da redistribuição ao reconhecimento? Dilemas da justiça na era pós-socialista. In: SOUZA, J. (org.). Democracia hoje: novos desafios para a teoria democrática contemporânea. Brasília: Ed. da UnB, 2021. pp.246-82.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert any(
+        item.category == "citation_match"
+        and item.issue_excerpt == "Fraser (2001)"
+        and "autoria coincide" in item.suggested_fix
+        and "FRASER (2021)" in item.suggested_fix
+        for item in normalized
+    )
+    assert not any("Incluir ou revisar a referência correspondente a Fraser (2001)" in (item.suggested_fix or "") for item in normalized)
+
+
+def test_normalize_batch_comments_flags_probable_glued_reference_instead_of_missing_reference():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "A discussão de humanização aparece em diversos momentos (DESLANDES, 2006, p. 38).",
+            "Referências",
+            "DESLANDES, Suely. Humanização: revisitando o conceito a partir das contribuições da sociologia médica. In: DESLANDES, S. F. et al. Humanização dos cuidados em saúde: conceitos, dilemas e práticas. Rio de Janeiro: Fiocruz, p. 33-47, 2006.DURKHEIM, E. Da divisão do trabalho social. São Paulo: Martins Fontes, 1999.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert any(
+        item.category == "citation_match"
+        and "DESLANDES" in (item.issue_excerpt or "")
+        and "entrada correspondente está malformada ou concatenada" in item.message
+        and "precisa ser separada ou reformatada" in item.suggested_fix
+        for item in normalized
+    )
+    assert not any("Incluir ou revisar a referência correspondente a DESLANDES (2006)" in (item.suggested_fix or "") for item in normalized)
+
+
 def test_normalize_batch_comments_does_not_repeat_reference_global_comment_outside_heading_batch():
     normalized = _normalize_batch_comments(
         comments=[],
@@ -2221,11 +2284,10 @@ def test_normalize_batch_comments_matches_first_reference_when_two_entries_are_g
         ],
     )
 
-    assert all(
-        not (
-            item.category == "citation_match"
-            and item.issue_excerpt == "Deslandes (2006)"
-        )
+    assert any(
+        item.category == "citation_match"
+        and item.issue_excerpt == "Deslandes (2006)"
+        and "entrada correspondente está malformada ou concatenada" in item.message
         for item in normalized
     )
 

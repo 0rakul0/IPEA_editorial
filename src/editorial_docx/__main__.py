@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from .config import build_output_paths, ensure_runtime_directories, resolve_input_path
 from .docx_utils import apply_comments_to_docx
 from .document_loader import load_document
 from .graph_chat import run_conversation
@@ -73,6 +74,8 @@ def _write_history_snapshot(main_path: Path, content: str | bytes) -> Path:
 
 
 def main() -> int:
+    ensure_runtime_directories()
+
     parser = argparse.ArgumentParser(description="Executa revisão editorial em arquivo DOCX/PDF.")
     parser.add_argument("input", type=Path, help="Caminho do arquivo de entrada (.docx ou .pdf)")
     parser.add_argument(
@@ -100,9 +103,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    loaded = load_document(args.input)
-    base = args.input.with_suffix("")
-    output_normalized_json = args.output_normalized_json or base.parent / f"{base.name}_normalized_document.json"
+    input_path = resolve_input_path(args.input)
+    loaded = load_document(input_path)
+    model_tag = get_llm_model_tag()
+    output_paths = build_output_paths(input_path, model_tag)
+
+    output_normalized_json = args.output_normalized_json or output_paths["normalized_json"]
     normalized_text = loaded.normalized_document.to_json()
     output_normalized_json.write_text(normalized_text, encoding="utf-8")
     history_normalized = _write_history_snapshot(output_normalized_json, normalized_text)
@@ -116,9 +122,10 @@ def main() -> int:
     )
     visible_comments = result.comments[:]
 
-    model_tag = get_llm_model_tag()
-    output_json = args.output_json or base.parent / f"{base.name}_output_{model_tag}.relatorio.json"
-    output_diagnostics_json = output_json.with_name(f"{output_json.stem}.diagnostics.json")
+    output_json = args.output_json or output_paths["report_json"]
+    output_diagnostics_json = output_paths["diagnostics_json"] if args.output_json is None else output_json.with_name(
+        f"{output_json.stem}.diagnostics.json"
+    )
     json_text = json.dumps(
         [_serialize_comment(c) for c in visible_comments],
         ensure_ascii=False,
@@ -131,8 +138,8 @@ def main() -> int:
     history_diagnostics = _write_history_snapshot(output_diagnostics_json, diagnostics_text)
 
     if loaded.kind == "docx":
-        output_docx = args.output_docx or base.parent / f"{base.name}_output_{model_tag}.docx"
-        docx_bytes = apply_comments_to_docx(args.input, result.comments)
+        output_docx = args.output_docx or output_paths["docx"]
+        docx_bytes = apply_comments_to_docx(input_path, result.comments)
         output_docx.write_bytes(docx_bytes)
         history_docx = _write_history_snapshot(output_docx, docx_bytes)
         print(f"DOCX comentado: {output_docx}")

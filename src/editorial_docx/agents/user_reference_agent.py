@@ -4,10 +4,10 @@ from collections.abc import Callable
 
 from ..llm import get_chat_model
 from ..models import AgentComment, VerificationDecision
+from ..pipeline.context import PreparedReviewDocument
+from ..pipeline.runtime import _invoke_with_model_fallback, _parse_comments_with_status, _sanitize_for_llm
 from ..prompts import build_agent_prompt
-from ..review_context import PreparedReviewDocument
 from ..review_patterns import _comment_key, _normalized_text, _ref_block_type
-from ..review_runtime import _invoke_with_model_fallback, _parse_comments_with_status, _sanitize_for_llm
 from ..user_comment_refs import (
     ReferenceSearchRequest,
     build_reference_search_requests,

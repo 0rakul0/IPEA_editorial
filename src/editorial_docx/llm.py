@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_OPENAI_MODEL = "gpt-5.2"
-DEFAULT_LLM_MAX_RETRIES = 3
-DEFAULT_LLM_RETRY_BACKOFF_SECONDS = 1.0
-DEFAULT_LLM_TIMEOUT_SECONDS = 120.0
-DEFAULT_GRAMMAR_AGENT_MAX_WORKERS = 3
+from .config import (
+    DEFAULT_GRAMMAR_AGENT_MAX_WORKERS,
+    DEFAULT_LLM_MAX_RETRIES,
+    DEFAULT_LLM_RETRY_BACKOFF_SECONDS,
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    DEFAULT_OLLAMA_API_KEY,
+    DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_MODEL,
+    PROJECT_ROOT,
+)
 
 
 def _load_env() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    env_path = project_root / ".env"
+    env_path = PROJECT_ROOT / ".env"
 
     if env_path.exists():
         load_dotenv(dotenv_path=env_path, override=False)
@@ -28,9 +32,9 @@ def _build_provider_config(provider: str) -> dict[str, str]:
     if provider == "ollama":
         return {
             "provider": "ollama",
-            "model": (os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL") or "llama3.1:8b").strip(),
-            "base_url": (os.getenv("OLLAMA_BASE_URL") or os.getenv("LLM_BASE_URL") or "http://localhost:11434/v1").strip(),
-            "api_key": (os.getenv("OLLAMA_API_KEY") or os.getenv("LLM_API_KEY") or "ollama").strip(),
+            "model": (os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL") or DEFAULT_OLLAMA_MODEL).strip(),
+            "base_url": (os.getenv("OLLAMA_BASE_URL") or os.getenv("LLM_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).strip(),
+            "api_key": (os.getenv("OLLAMA_API_KEY") or os.getenv("LLM_API_KEY") or DEFAULT_OLLAMA_API_KEY).strip(),
         }
 
     if provider == "openai_compatible":

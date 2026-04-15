@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 
-from .models import AgentComment
-from .review_patterns import _normalized_text
+from ..models import AgentComment
+from ..review_patterns import _normalized_text
 
 
 def _semantic_text(text: str) -> str:

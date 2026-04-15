@@ -5,15 +5,15 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .agents import USER_REFERENCE_AGENT, run_user_reference_agent
-from .document_loader import Section
-from .llm import get_chat_model
-from .models import AgentComment, ConversationResult, DocumentUserComment, VerificationDecision
-from .prompts import build_agent_prompt
-from .review_context import PreparedReviewDocument
-from .review_coordinator import build_coordinator_excerpt, coordinate_answer
-from .review_patterns import _folded_text
-from .review_runtime import (
+from ..agents import USER_REFERENCE_AGENT, run_user_reference_agent
+from ..document_loader import Section
+from ..llm import get_chat_model
+from ..models import AgentComment, ConversationResult, DocumentUserComment, VerificationDecision
+from ..prompts import build_agent_prompt
+from ..review_patterns import _folded_text
+from .context import PreparedReviewDocument
+from .coordinator import build_coordinator_excerpt, coordinate_answer
+from .runtime import (
     LLMConnectionFailure,
     _build_batch_review_excerpt,
     _comment_memory_lines,
@@ -26,8 +26,8 @@ from .review_runtime import (
     _truncate_progressive_summary,
     _update_running_summary,
 )
-from .review_scope import prepare_review_batches, _consolidate_final_comments
-from .review_validation import _format_batch_status, _review_comments_with_llm, _summarize_verification, _verify_batch_comments
+from .scope import prepare_review_batches, _consolidate_final_comments
+from .validation import _format_batch_status, _review_comments_with_llm, _summarize_verification, _verify_batch_comments
 
 
 class ChatState(TypedDict, total=False):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .review_runtime import build_coordinator_answer
+from .runtime import build_coordinator_answer
 
 
 def build_coordinator_excerpt(total_chunks: int, agent_order: list[str], toc: list[str]) -> str:

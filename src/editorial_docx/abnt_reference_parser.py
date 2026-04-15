@@ -14,6 +14,9 @@ from .abnt_document_types import (
     ABNT_TYPE_THESIS,
 )
 from .abnt_normalizer import canonical_author_key, publication_year_from_reference
+from .review_patterns import _ascii_fold
+
+_GLUED_REFERENCE_RE = re.compile(r"\.\s*(?=[A-Z][A-Z'`\-]+,\s)")
 
 
 @dataclass(frozen=True)
@@ -37,25 +40,34 @@ class ParsedReferenceEntry:
     has_volume: bool
     has_number: bool
     has_pages: bool
+    has_glued_reference: bool = False
 
     @property
     def key(self) -> tuple[str, str]:
         return self.author_key, self.publication_year
 
 
+def _primary_reference_segment(text: str) -> str:
+    source = (text or "").strip()
+    if not source:
+        return ""
+    segments = _GLUED_REFERENCE_RE.split(source, maxsplit=1)
+    return segments[0].strip() if segments else source
+
+
 def _infer_reference_document_type(text: str) -> str:
-    source = text.casefold()
-    if any(marker in source for marker in ("lei ", "decreto ", "portaria ", "resolução ", "resolucao ")):
+    source = _ascii_fold(text).casefold()
+    if any(marker in source for marker in ("lei ", "decreto ", "portaria ", "resolucao ")):
         return ABNT_TYPE_LEGAL
-    if any(marker in source for marker in ("tese", "dissertação", "dissertacao")):
+    if any(marker in source for marker in ("tese", "dissertacao")):
         return ABNT_TYPE_THESIS
     if " in: " in source:
         return ABNT_TYPE_CHAPTER
-    if "disponível em:" in source or "disponivel em:" in source:
+    if "disponivel em:" in source:
         return ABNT_TYPE_ONLINE
     if "doi" in source or re.search(r"\bv\.\s*\d+", source) or re.search(r"\bn\.\s*\d+", source):
         return ABNT_TYPE_ARTICLE
-    if any(marker in source for marker in ("texto para discussão", "texto para discussao", "relatório", "relatorio", "ipea")):
+    if any(marker in source for marker in ("texto para discussao", "relatorio", "ipea")):
         return ABNT_TYPE_INSTITUTIONAL_REPORT
     if re.search(r":[^:]+,\s*(?:19|20)\d{2}", text):
         return ABNT_TYPE_BOOK
@@ -80,7 +92,7 @@ def _extract_container_title(source: str, title: str) -> str:
 
 
 def _extract_place_and_publisher(source: str) -> tuple[str, str]:
-    match = re.search(r"([A-ZÀ-Ý][A-Za-zÀ-ÿ\s\-]+):\s*([^,.;]+)", source)
+    match = re.search(r"([A-Z][^:.,;]{1,80}):\s*([^,.;]+)", source)
     if not match:
         return "", ""
     return match.group(1).strip(), match.group(2).strip()
@@ -89,11 +101,8 @@ def _extract_place_and_publisher(source: str) -> tuple[str, str]:
 def _extract_institution(source: str, author_raw: str, publisher: str) -> str:
     if author_raw.isupper():
         return author_raw.strip()
-    match = re.search(
-        r"\b(universidade|instituto|instituição|instituicao|ministério|ministerio|secretaria|ipea)\b",
-        source,
-        flags=re.IGNORECASE,
-    )
+    folded = _ascii_fold(source).casefold()
+    match = re.search(r"\b(universidade|instituto|instituicao|ministerio|secretaria|ipea)\b", folded)
     if match:
         return match.group(0).strip()
     return publisher
@@ -104,34 +113,35 @@ def parse_reference_entry(text: str, *, blocked_author_tokens: set[str] | None =
     if not source:
         return None
 
-    publication_year = publication_year_from_reference(source)
+    primary_entry = _primary_reference_segment(source)
+    publication_year = publication_year_from_reference(primary_entry)
     if not publication_year:
         return None
 
-    if "," in source:
-        author_raw = source.split(",", 1)[0].strip()
-    elif "." in source:
-        author_raw = source.split(".", 1)[0].strip()
+    if "," in primary_entry:
+        author_raw = primary_entry.split(",", 1)[0].strip()
+    elif "." in primary_entry:
+        author_raw = primary_entry.split(".", 1)[0].strip()
     else:
-        author_raw = source
+        author_raw = primary_entry
 
     author_key = canonical_author_key(author_raw, extra_blocked_tokens=blocked_author_tokens)
     if author_key is None:
         return None
 
-    document_type = _infer_reference_document_type(source)
-    title = _extract_reference_title(source, author_raw)
-    container_title = _extract_container_title(source, title)
-    place, publisher = _extract_place_and_publisher(source)
-    has_url = bool(re.search(r"https?://\S+", source, flags=re.IGNORECASE))
-    has_access_date = bool(re.search(r"\bAcesso em\s*:", source, flags=re.IGNORECASE))
-    has_doi = bool(re.search(r"\bdoi\b", source, flags=re.IGNORECASE))
-    has_in = bool(re.search(r"\bIn:\s*", source, flags=re.IGNORECASE))
-    has_volume = bool(re.search(r"\bv\.\s*\d+", source, flags=re.IGNORECASE))
-    has_number = bool(re.search(r"\bn\.\s*\d+", source, flags=re.IGNORECASE))
-    has_pages = bool(re.search(r"\bp{1,2}\.\s*\d+", source, flags=re.IGNORECASE))
-    institution = _extract_institution(source, author_raw, publisher)
-    year_candidates = tuple(re.findall(r"\b(?:19|20)\d{2}[a-z]?\b", source, flags=re.IGNORECASE))
+    document_type = _infer_reference_document_type(primary_entry)
+    title = _extract_reference_title(primary_entry, author_raw)
+    container_title = _extract_container_title(primary_entry, title)
+    place, publisher = _extract_place_and_publisher(primary_entry)
+    has_url = bool(re.search(r"https?://\S+", primary_entry, flags=re.IGNORECASE))
+    has_access_date = bool(re.search(r"\bAcesso em\s*:", primary_entry, flags=re.IGNORECASE))
+    has_doi = bool(re.search(r"\bdoi\b", primary_entry, flags=re.IGNORECASE))
+    has_in = bool(re.search(r"\bIn:\s*", primary_entry, flags=re.IGNORECASE))
+    has_volume = bool(re.search(r"\bv\.\s*\d+", primary_entry, flags=re.IGNORECASE))
+    has_number = bool(re.search(r"\bn\.\s*\d+", primary_entry, flags=re.IGNORECASE))
+    has_pages = bool(re.search(r"\bp{1,2}\.\s*\d+", primary_entry, flags=re.IGNORECASE))
+    institution = _extract_institution(primary_entry, author_raw, publisher)
+    year_candidates = tuple(re.findall(r"\b(?:19|20)\d{2}[a-z]?\b", primary_entry, flags=re.IGNORECASE))
 
     return ParsedReferenceEntry(
         raw_text=source,
@@ -153,6 +163,7 @@ def parse_reference_entry(text: str, *, blocked_author_tokens: set[str] | None =
         has_volume=has_volume,
         has_number=has_number,
         has_pages=has_pages,
+        has_glued_reference=bool(_GLUED_REFERENCE_RE.search(source)),
     )
 
 

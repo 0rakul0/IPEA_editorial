@@ -7,10 +7,10 @@ from json import JSONDecodeError
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from .llm import get_chat_model, get_chat_models, get_llm_retry_config
-from .models import AgentComment, agent_short_label
-from .prompts import AgentCommentsPayload, CommentReviewsPayload, build_coordinator_prompt
-from .review_context import PreparedReviewDocument, ReviewBatch
+from ..llm import get_chat_model, get_chat_models, get_llm_retry_config
+from ..models import AgentComment, agent_short_label
+from ..prompts import AgentCommentsPayload, CommentReviewsPayload, build_coordinator_prompt
+from .context import PreparedReviewDocument, ReviewBatch
 
 _CTRL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 _SURROGATE_RE = re.compile(r"[\uD800-\uDFFF]")
@@ -169,6 +169,25 @@ def _partial_answer_from_comments(comments: list[AgentComment], prefix: str) -> 
         points = "\n".join(f"- [{agent_short_label(c.agent)}] {c.message}" for c in comments[:12])
         return prefix + "\n" + points
     return prefix
+
+
+def _build_coordinator_document_excerpt(comments: list[AgentComment], limit: int = 12) -> str:
+    if not comments:
+        return "(sem comentários aceitos para contextualizar a síntese final)"
+
+    lines: list[str] = []
+    for item in comments[:limit]:
+        paragraph_label = (
+            f"[{item.paragraph_index}] "
+            if isinstance(item.paragraph_index, int)
+            else ""
+        )
+        excerpt = (item.issue_excerpt or "").strip()
+        if excerpt:
+            lines.append(f"- {paragraph_label}{excerpt}")
+        else:
+            lines.append(f"- {paragraph_label}{item.message}")
+    return "\n".join(lines)
 
 
 def _truncate_progressive_summary(summary: str, max_chars: int = 6000) -> str:
@@ -517,6 +536,7 @@ def build_coordinator_answer(question: str, comments: list[AgentComment]) -> str
     prompt = build_coordinator_prompt()
     payload = {
         "question": _sanitize_for_llm(question),
+        "document_excerpt": _sanitize_for_llm(_build_coordinator_document_excerpt(comments)),
         "comments_json": _sanitize_for_llm(_serialize_comments(comments)),
     }
     try:
@@ -539,6 +559,7 @@ __all__ = [
     "_build_batch_review_excerpt",
     "_comment_memory_lines",
     "_classify_llm_failure",
+    "_build_coordinator_document_excerpt",
     "_connection_error_summary",
     "_deterministic_progressive_summary",
     "_invoke_coordinator_with_retry",

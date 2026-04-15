@@ -34,3 +34,5 @@ dist/
 /testes/historico
 /testes/benchmarks
 /testes
+*.docx
+*.json

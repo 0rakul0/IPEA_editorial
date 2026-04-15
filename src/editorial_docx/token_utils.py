@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .config import DEFAULT_REVIEW_MAX_BATCH_CHUNKS
+
 try:
     import tiktoken
 except Exception:  # pragma: no cover - fallback when optional dependency is absent
@@ -39,7 +41,7 @@ def truncate_text(text: str, max_tokens: int) -> str:
 class TokenChunkConfig:
     max_tokens: int = 3200
     overlap_tokens: int = 240
-    max_items: int = 28
+    max_items: int = DEFAULT_REVIEW_MAX_BATCH_CHUNKS
 
 
 def chunk_index_windows(

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .context_selector import build_excerpt
-from .document_loader import Section
-from .models import DocumentUserComment
-from .token_utils import TokenChunkConfig, chunk_index_windows
-
-_GRAMMAR_BATCH_SIZE = 4
-_GRAMMAR_BATCH_OVERLAP = 1
+from ..config import (
+    DEFAULT_REVIEW_MAX_BATCH_CHARS,
+    DEFAULT_REVIEW_MAX_BATCH_CHUNKS,
+    DEFAULT_REVIEW_WINDOW_RADIUS,
+    GRAMMAR_BATCH_OVERLAP,
+    GRAMMAR_BATCH_SIZE,
+)
+from ..context_selector import build_excerpt
+from ..document_loader import Section
+from ..models import DocumentUserComment
+from ..token_utils import TokenChunkConfig, chunk_index_windows
 
 
 @dataclass(slots=True)
@@ -35,8 +39,8 @@ def _build_batches(
     chunks: list[str],
     refs: list[str],
     indexes: list[int],
-    max_chars: int = 12000,
-    max_chunks: int = 28,
+    max_chars: int = DEFAULT_REVIEW_MAX_BATCH_CHARS,
+    max_chunks: int = DEFAULT_REVIEW_MAX_BATCH_CHUNKS,
 ) -> list[list[int]]:
     if not chunks or not indexes:
         return []
@@ -66,13 +70,13 @@ def _build_agent_batches(
         if not filtered:
             return []
         batches: list[list[int]] = []
-        step = max(1, _GRAMMAR_BATCH_SIZE - _GRAMMAR_BATCH_OVERLAP)
+        step = max(1, GRAMMAR_BATCH_SIZE - GRAMMAR_BATCH_OVERLAP)
         for start in range(0, len(filtered), step):
-            batch = filtered[start : start + _GRAMMAR_BATCH_SIZE]
+            batch = filtered[start : start + GRAMMAR_BATCH_SIZE]
             if not batch:
                 continue
             batches.append(batch)
-            if start + _GRAMMAR_BATCH_SIZE >= len(filtered):
+            if start + GRAMMAR_BATCH_SIZE >= len(filtered):
                 break
         return batches
     return _build_batches(
@@ -115,9 +119,9 @@ def prepare_review_document(
     agent_order: list[str],
     agent_scope_builder,
     user_comments: list[DocumentUserComment] | None = None,
-    max_batch_chars: int = 12000,
-    max_batch_chunks: int = 28,
-    window_radius: int = 2,
+    max_batch_chars: int = DEFAULT_REVIEW_MAX_BATCH_CHARS,
+    max_batch_chunks: int = DEFAULT_REVIEW_MAX_BATCH_CHUNKS,
+    window_radius: int = DEFAULT_REVIEW_WINDOW_RADIUS,
 ) -> PreparedReviewDocument:
     """Prepara lotes, janelas de contexto e TOC para todos os agentes."""
     toc = [f"{section.title} [{section.start_idx}-{section.end_idx}]" for section in sections]

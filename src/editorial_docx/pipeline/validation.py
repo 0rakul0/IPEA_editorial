@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 
-from .comment_localizer import locate_comment_in_document
-from .models import AgentComment, VerificationDecision, VerificationSummary
-from .prompts import build_comment_review_prompt
-from .review_heuristics import _heuristic_comments_for_agent
-from .review_patterns import (
+from ..comment_localizer import locate_comment_in_document
+from ..models import AgentComment, VerificationDecision, VerificationSummary
+from ..prompts import build_comment_review_prompt
+from ..review_heuristics import _heuristic_comments_for_agent
+from ..review_patterns import (
     _ALLOWED_TYPOGRAPHY_KEYS,
     _STYLE_BY_BLOCK_TYPE,
     _adds_coordination_comma,
@@ -42,7 +42,7 @@ from .review_patterns import (
     _style_name_looks_explicit,
     _years_in_text,
 )
-from .review_runtime import (
+from .runtime import (
     LLMConnectionFailure,
     _connection_error_summary,
     _invoke_with_model_fallback,

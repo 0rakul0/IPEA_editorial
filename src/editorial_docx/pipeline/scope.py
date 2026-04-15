@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import re
 
-from .document_loader import Section
-from .models import AgentComment, DocumentUserComment, agent_short_label
-from .prompts import AGENT_ORDER
-from .review_consolidation import consolidate_semantic_comments
-from .review_context import PreparedReviewDocument, prepare_review_document as _prepare_review_document
-from .review_heuristics import _find_reference_citation_indexes
-from .review_patterns import (
+from ..config import DEFAULT_REVIEW_MAX_BATCH_CHARS, DEFAULT_REVIEW_MAX_BATCH_CHUNKS
+from ..document_loader import Section
+from ..models import AgentComment, DocumentUserComment, agent_short_label
+from ..prompts import AGENT_ORDER
+from ..review_patterns import (
     _find_metadata_like_indexes,
     _heading_word_count,
     _indexes_by_ref_type,
@@ -19,6 +17,9 @@ from .review_patterns import (
     _ref_style_name,
     _style_name_looks_explicit,
 )
+from .consolidation import consolidate_semantic_comments
+from .context import PreparedReviewDocument, prepare_review_document as _prepare_review_document
+from ..review_heuristics import _find_reference_citation_indexes
 
 _USER_REFERENCE_AGENT = "comentarios_usuario_referencias"
 
@@ -27,8 +28,8 @@ def _build_batches(
     chunks: list[str],
     refs: list[str],
     indexes: list[int],
-    max_chars: int = 12000,
-    max_chunks: int = 28,
+    max_chars: int = DEFAULT_REVIEW_MAX_BATCH_CHARS,
+    max_chunks: int = DEFAULT_REVIEW_MAX_BATCH_CHUNKS,
 ) -> list[list[int]]:
     if not chunks or not indexes:
         return []

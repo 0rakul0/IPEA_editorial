@@ -1,18 +1,18 @@
 from pathlib import Path
 
-from editorial_docx.abnt_citation_parser import extract_citation_candidates
-from editorial_docx.abnt_matcher import compare_citations_to_references
-from editorial_docx.abnt_reference_parser import parse_reference_entry
-from editorial_docx.abnt_validator import validate_reference_entry
+from editorial_docx.references.citations import extract_citation_candidates
+from editorial_docx.references.matcher import compare_citations_to_references
+from editorial_docx.references.parser import parse_reference_entry
+from editorial_docx.references.validator import validate_reference_entry
 from editorial_docx.benchmark_runner import discover_rais_documents
-from editorial_docx.document_loader import load_normalized_document
-from editorial_docx.comment_localizer import locate_comment_in_document
-from editorial_docx.document_loader import Section
+from editorial_docx.io.comment_localizer import locate_comment_in_document
+from editorial_docx.io.document_loader import Section, load_normalized_document
 from editorial_docx.models import AgentComment, DocumentUserComment
-from editorial_docx.normalized_document import build_normalized_document
-from editorial_docx.review_scope import _agent_scope_indexes
+from editorial_docx.io.normalized_document import build_normalized_document
+from editorial_docx.pipeline.consolidation import consolidate_semantic_comments
+from editorial_docx.pipeline.context import prepare_review_document
+from editorial_docx.pipeline.scope import _agent_scope_indexes
 from editorial_docx.review_heuristics import _reference_entry_key
-from editorial_docx.review_consolidation import consolidate_semantic_comments
 from editorial_docx.token_utils import TokenChunkConfig, chunk_index_windows
 
 
@@ -60,8 +60,6 @@ def test_chunk_index_windows_keeps_overlap_between_batches():
 
 
 def test_prepare_review_document_batches_grammar_by_micro_batches():
-    from editorial_docx.review_context import prepare_review_document
-
     prepared = prepare_review_document(
         chunks=["Parágrafo A.", "Parágrafo B.", "Parágrafo C.", "Parágrafo D.", "Parágrafo E.", "Parágrafo F."],
         refs=[
@@ -226,6 +224,56 @@ def test_compare_citations_to_references_matches_casefolded_author_keys():
 
     assert result.missing_citations == ()
     assert result.uncited_references == ()
+
+
+def test_compare_citations_to_references_marks_probable_year_mismatch_instead_of_missing():
+    citations = extract_citation_candidates(
+        chunks=["Como destaca Fraser (2001), o problema envolve redistribuição e reconhecimento.", "Referências"],
+        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=reference_heading"],
+        body_limit=1,
+        is_non_body_context=lambda ref, chunk, **kwargs: False,
+    )
+    parsed = parse_reference_entry(
+        "FRASER, N. Da redistribuição ao reconhecimento? Dilemas da justiça na era pós-socialista. In: SOUZA, J. (org.). Democracia hoje: novos desafios para a teoria democrática contemporânea. Brasília: Ed. da UnB, 2021. pp.246-82."
+    )
+
+    result = compare_citations_to_references(citations, [parsed] if parsed is not None else [])
+
+    assert result.missing_citations == ()
+    assert len(result.probable_matches) == 1
+    assert result.probable_matches[0].match_type == "year_mismatch"
+    assert result.probable_matches[0].citation.label == "Fraser (2001)"
+    assert result.probable_matches[0].reference.label == "FRASER (2021)"
+
+
+def test_parse_reference_entry_detects_glued_entries_and_keeps_first_reference_year():
+    parsed = parse_reference_entry(
+        "DESLANDES, Suely. Humanização: revisitando o conceito a partir das contribuições da sociologia médica. In: DESLANDES, S. F. et al. Humanização dos cuidados em saúde: conceitos, dilemas e práticas. Rio de Janeiro: Fiocruz, p. 33-47, 2006.DURKHEIM, E. Da divisão do trabalho social. São Paulo: Martins Fontes, 1999."
+    )
+
+    assert parsed is not None
+    assert parsed.author_key == "deslandes"
+    assert parsed.publication_year == "2006"
+    assert parsed.has_glued_reference is True
+
+
+def test_compare_citations_to_references_marks_probable_format_problem_for_glued_reference():
+    citations = extract_citation_candidates(
+        chunks=["A discussão retoma a noção de humanização (DESLANDES, 2006, p. 38).", "Referências"],
+        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=reference_heading"],
+        body_limit=1,
+        is_non_body_context=lambda ref, chunk, **kwargs: False,
+    )
+    parsed = parse_reference_entry(
+        "DESLANDES, Suely. Humanização: revisitando o conceito a partir das contribuições da sociologia médica. In: DESLANDES, S. F. et al. Humanização dos cuidados em saúde: conceitos, dilemas e práticas. Rio de Janeiro: Fiocruz, p. 33-47, 2006.DURKHEIM, E. Da divisão do trabalho social. São Paulo: Martins Fontes, 1999."
+    )
+
+    result = compare_citations_to_references(citations, [parsed] if parsed is not None else [])
+
+    assert result.missing_citations == ()
+    assert len(result.probable_matches) == 1
+    assert result.probable_matches[0].match_type == "format_problem"
+    assert result.probable_matches[0].reference.publication_year == "2006"
 
 
 def test_validate_reference_entry_flags_missing_access_date_for_online_reference():

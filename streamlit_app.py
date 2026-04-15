@@ -12,6 +12,7 @@ from typing import Callable
 
 import streamlit as st
 
+from src.editorial_docx.config import INPUT_DATA_DIR, OUTPUT_DATA_DIR, build_output_paths, ensure_runtime_directories
 from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document, load_normalized_document
 from src.editorial_docx.graph_chat import run_conversation
@@ -21,6 +22,8 @@ from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
 st.set_page_config(page_title="Editorial TD - Agentes", layout="wide")
 st.title("Revisão Editorial TD com Agentes")
+
+ensure_runtime_directories()
 
 AGENT_LABELS = {
     "metadados": "Metadados",
@@ -65,6 +68,11 @@ with st.sidebar:
                     st.warning("Informe uma chave antes de confirmar.")
         else:
             st.caption("Provider Ollama configurado: chave não é obrigatória por padrão.")
+
+    st.divider()
+    st.markdown("### Pastas")
+    st.caption(f"Entrada: `{INPUT_DATA_DIR}`")
+    st.caption(f"Saída: `{OUTPUT_DATA_DIR}`")
 
     st.divider()
     st.markdown("### Execução")
@@ -118,6 +126,10 @@ for key, default in {
     "user_comments": [],
     "normalized_json_text": "",
     "normalized_json_path": None,
+    "source_name": "",
+    "report_json_path": None,
+    "diagnostics_json_path": None,
+    "commented_docx_path": None,
     "selected_comment_row": 0,
     "correction_state": {},
     "comments_signature": "",
@@ -255,6 +267,55 @@ def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
             )
         )
     return export_comments
+
+
+def _list_data_files(*suffixes: str) -> list[Path]:
+    if not INPUT_DATA_DIR.exists():
+        return []
+    normalized_suffixes = {suffix.lower() for suffix in suffixes}
+    return sorted(
+        [path for path in INPUT_DATA_DIR.iterdir() if path.is_file() and path.suffix.lower() in normalized_suffixes],
+        key=lambda item: item.name.lower(),
+    )
+
+
+def _persist_loaded_normalized(loaded, source_path: Path) -> Path:
+    output_paths = build_output_paths(source_path, llm_model_tag)
+    normalized_output_path = output_paths["normalized_json"]
+    normalized_output_path.write_text(loaded.normalized_document.to_json(), encoding="utf-8")
+    return normalized_output_path
+
+
+def _persist_review_outputs(report_rows: list[dict], export_comments: list[AgentComment]) -> tuple[Path, Path, Path | None, bytes | None]:
+    source_for_outputs = st.session_state.doc_path or st.session_state.normalized_json_path or (INPUT_DATA_DIR / st.session_state.source_name)
+    output_paths = build_output_paths(Path(source_for_outputs), llm_model_tag)
+
+    report_json_path = output_paths["report_json"]
+    diagnostics_json_path = output_paths["diagnostics_json"]
+    report_json_path.write_text(json.dumps(report_rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    diagnostics_payload = {
+        "comment_count": len(export_comments),
+        "source_name": st.session_state.source_name,
+        "provider": llm_config["provider"],
+        "model": llm_config["model"],
+    }
+    diagnostics_json_path.write_text(json.dumps(diagnostics_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    docx_path: Path | None = None
+    docx_bytes: bytes | None = None
+    if st.session_state.doc_path and st.session_state.doc_kind == "docx":
+        docx_bytes = apply_comments_to_docx(
+            st.session_state.doc_path,
+            export_comments,
+        )
+        docx_path = output_paths["docx"]
+        docx_path.write_bytes(docx_bytes)
+
+    st.session_state.report_json_path = report_json_path
+    st.session_state.diagnostics_json_path = diagnostics_json_path
+    st.session_state.commented_docx_path = docx_path
+    return report_json_path, diagnostics_json_path, docx_path, docx_bytes
 
 
 def _set_status_value(key: str, value: str) -> None:
@@ -484,10 +545,27 @@ def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: 
     st.session_state.doc_kind = loaded.kind
     st.session_state.normalized_json_text = loaded.normalized_document.to_json()
     st.session_state.normalized_json_path = loaded.source_path
+    st.session_state.source_name = (doc_path or loaded.source_path).stem
+    st.session_state.report_json_path = None
+    st.session_state.diagnostics_json_path = None
+    st.session_state.commented_docx_path = None
 
 
-uploaded = st.file_uploader("Ingestão do documento (.docx ou .pdf)", type=["docx", "pdf"])
-uploaded_normalized = st.file_uploader("Reaproveitar normalized_document.json", type=["json"])
+available_documents = _list_data_files(".docx", ".pdf")
+available_normalized = _list_data_files(".json")
+
+selected_document_name = st.selectbox(
+    "Arquivos em input_data (.docx ou .pdf)",
+    options=[""] + [path.name for path in available_documents],
+    index=0,
+)
+selected_normalized_name = st.selectbox(
+    "Normalized em input_data (.json)",
+    options=[""] + [path.name for path in available_normalized],
+    index=0,
+)
+uploaded = st.file_uploader("Adicionar documento ao input_data (.docx ou .pdf)", type=["docx", "pdf"])
+uploaded_normalized = st.file_uploader("Adicionar normalized_document.json ao input_data", type=["json"])
 
 if uploaded is not None:
     file_bytes = uploaded.getvalue()
@@ -496,14 +574,11 @@ if uploaded is not None:
     st.session_state.doc_profile = profile.key
 
     if st.session_state.doc_fingerprint != file_fingerprint:
-        tmp_dir = Path(".tmp")
-        tmp_dir.mkdir(exist_ok=True)
-        doc_path = tmp_dir / uploaded.name
+        doc_path = INPUT_DATA_DIR / uploaded.name
         doc_path.write_bytes(file_bytes)
 
         loaded = load_document(doc_path)
-        normalized_path = tmp_dir / f"{doc_path.stem}_normalized_document.json"
-        normalized_path.write_text(loaded.normalized_document.to_json(), encoding="utf-8")
+        normalized_path = _persist_loaded_normalized(loaded, doc_path)
         _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=file_bytes, doc_path=doc_path)
         st.session_state.normalized_json_path = normalized_path
 
@@ -511,10 +586,28 @@ elif uploaded_normalized is not None:
     file_bytes = uploaded_normalized.getvalue()
     file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
     if st.session_state.doc_fingerprint != file_fingerprint:
-        tmp_dir = Path(".tmp")
-        tmp_dir.mkdir(exist_ok=True)
-        normalized_path = tmp_dir / uploaded_normalized.name
+        normalized_path = INPUT_DATA_DIR / uploaded_normalized.name
         normalized_path.write_bytes(file_bytes)
+        loaded = load_normalized_document(normalized_path)
+        st.session_state.doc_profile = "GENERIC"
+        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
+        st.session_state.normalized_json_path = normalized_path
+elif selected_document_name:
+    doc_path = INPUT_DATA_DIR / selected_document_name
+    file_bytes = doc_path.read_bytes()
+    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
+    profile = detect_prompt_profile(doc_path.name)
+    st.session_state.doc_profile = profile.key
+    if st.session_state.doc_fingerprint != file_fingerprint:
+        loaded = load_document(doc_path)
+        normalized_path = _persist_loaded_normalized(loaded, doc_path)
+        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=file_bytes, doc_path=doc_path)
+        st.session_state.normalized_json_path = normalized_path
+elif selected_normalized_name:
+    normalized_path = INPUT_DATA_DIR / selected_normalized_name
+    file_bytes = normalized_path.read_bytes()
+    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
+    if st.session_state.doc_fingerprint != file_fingerprint:
         loaded = load_normalized_document(normalized_path)
         st.session_state.doc_profile = "GENERIC"
         _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
@@ -646,37 +739,40 @@ with col_chat:
     if rows:
         _ensure_correction_state(rows)
         report = _build_correction_report(rows)
+        export_comments = _build_export_comments(report)
+        report_json_path, diagnostics_json_path, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
         st.subheader("Comentários dos agentes")
         st.dataframe(rows, width="stretch")
+        st.caption(f"Relatório salvo em: `{report_json_path}`")
+        st.caption(f"Diagnóstico salvo em: `{diagnostics_json_path}`")
 
-        if st.session_state.doc_path and st.session_state.doc_kind == "docx":
-            output_bytes = apply_comments_to_docx(
-                st.session_state.doc_path,
-                _build_export_comments(report),
-            )
+        if docx_path and docx_bytes is not None:
+            st.caption(f"DOCX comentado salvo em: `{docx_path}`")
             st.download_button(
                 label="Baixar DOCX comentado",
-                data=output_bytes,
-                file_name=f"{Path(st.session_state.doc_path).stem}_output_{llm_model_tag}.docx",
+                data=docx_bytes,
+                file_name=docx_path.name,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
         st.download_button(
             label="Baixar relatório de correções (JSON)",
             data=json.dumps(report, ensure_ascii=False, indent=2),
-            file_name=f"{Path(st.session_state.doc_path).stem if st.session_state.doc_path else 'correcoes'}_output_{llm_model_tag}.relatorio.json",
+            file_name=report_json_path.name,
             mime="application/json",
         )
     elif st.session_state.comments:
-        if st.session_state.doc_path and st.session_state.doc_kind == "docx":
-            output_bytes = apply_comments_to_docx(
-                st.session_state.doc_path,
-                st.session_state.comments,
-            )
+        report = _build_correction_report(_build_rows())
+        export_comments = st.session_state.comments
+        report_json_path, diagnostics_json_path, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
+        st.caption(f"Relatório salvo em: `{report_json_path}`")
+        st.caption(f"Diagnóstico salvo em: `{diagnostics_json_path}`")
+        if docx_path and docx_bytes is not None:
+            st.caption(f"DOCX comentado salvo em: `{docx_path}`")
             st.download_button(
                 label="Baixar DOCX com ajustes automáticos",
-                data=output_bytes,
-                file_name=f"{Path(st.session_state.doc_path).stem}_output_{llm_model_tag}.docx",
+                data=docx_bytes,
+                file_name=docx_path.name,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
