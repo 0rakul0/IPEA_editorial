@@ -38,6 +38,8 @@ class ChatState(TypedDict, total=False):
     comments: list[AgentComment]
     answer: str
     batch_status: str
+    llm_raw_comment_count: int
+    llm_post_review_comment_count: int
 
 
 def _agent_node(agent: str):
@@ -46,6 +48,8 @@ def _agent_node(agent: str):
             return {
                 "comments": state.get("comments", []),
                 "batch_status": "modelo indisponível",
+                "llm_raw_comment_count": 0,
+                "llm_post_review_comment_count": 0,
             }
 
         prompt = build_agent_prompt(agent, profile_key=state.get("profile_key"))
@@ -59,17 +63,23 @@ def _agent_node(agent: str):
                 return {
                     "comments": state.get("comments", []),
                     "batch_status": "modelo indisponível",
+                    "llm_raw_comment_count": 0,
+                    "llm_post_review_comment_count": 0,
                 }
         except LLMConnectionFailure as exc:
             return {
                 "comments": state.get("comments", []),
                 "batch_status": f"falha de conexão da LLM após retries: {_connection_error_summary(exc.original)}",
+                "llm_raw_comment_count": 0,
+                "llm_post_review_comment_count": 0,
             }
         except Exception as exc:
             if _is_json_body_error(exc):
                 return {
                     "comments": state.get("comments", []),
                     "batch_status": "falha de payload da LLM",
+                    "llm_raw_comment_count": 0,
+                    "llm_post_review_comment_count": 0,
                 }
             raise
         raw = response.content if isinstance(response.content, str) else str(response.content)
@@ -83,7 +93,12 @@ def _agent_node(agent: str):
         )
         merged = [*state.get("comments", []), *reviewed_items]
         combined_status = status if review_status == "revisor ignorado" else f"{status} | {review_status}"
-        return {"comments": merged, "batch_status": combined_status}
+        return {
+            "comments": merged,
+            "batch_status": combined_status,
+            "llm_raw_comment_count": len(items),
+            "llm_post_review_comment_count": len(reviewed_items),
+        }
 
     return run
 
@@ -123,8 +138,7 @@ def run_prepared_review(
     final_comments: list[AgentComment] = []
     verification_decisions: list[VerificationDecision] = []
     running_summaries = {agent: "" for agent in agent_order}
-    interrupted_reason = ""
-    interrupted_agent = ""
+    failed_agents: list[tuple[str, str]] = []
 
     for agent in agent_order:
         if agent == USER_REFERENCE_AGENT:
@@ -148,7 +162,6 @@ def run_prepared_review(
         if not batches:
             continue
 
-        stop_processing = False
         for batch_idx, batch in enumerate(batches, start=1):
             excerpt = _build_batch_review_excerpt(
                 prepared=prepared_document,
@@ -157,6 +170,7 @@ def run_prepared_review(
             )
             comments_before_batch = len(final_comments)
             accepted_in_batch: list[AgentComment] = []
+            batch_failed = False
             initial_state: ChatState = {
                 "question": question,
                 "document_excerpt": excerpt,
@@ -202,13 +216,12 @@ def run_prepared_review(
                 if on_agent_progress is not None:
                     on_agent_progress(agent, batch_idx, len(batches), new_count, total)
                 if "falha de conexao da llm" in _folded_text(batch_status):
-                    interrupted_reason = batch_status
-                    interrupted_agent = agent
-                    stop_processing = True
-                    break
+                    failed_agents.append((agent, batch_status))
+                    batch_failed = True
+                    continue
 
-            if stop_processing:
-                break
+            if batch_failed:
+                continue
 
             running_summaries[agent] = _update_running_summary(
                 agent=agent,
@@ -218,18 +231,16 @@ def run_prepared_review(
                 accepted_comments=accepted_in_batch,
             )
 
-        if stop_processing:
-            break
-
     consolidated_comments = _consolidate_final_comments(final_comments, prepared_document.refs)
 
-    if interrupted_reason:
-        final_answer = _partial_answer_from_comments(
-            consolidated_comments,
-            "Resumo parcial (execução interrompida por falha de conexão da LLM"
-            + (f" no agente {interrupted_agent}" if interrupted_agent else "")
-            + f": {interrupted_reason}).",
-        )
+    if failed_agents:
+        failed_summary = "; ".join(f"{agent}: {status}" for agent, status in failed_agents)
+        base_answer = coordinate_answer(question=question, comments=consolidated_comments)
+        final_answer = (
+            (base_answer or "").rstrip()
+            + "\n\n"
+            + f"Avisos de execução: alguns agentes ficaram indisponíveis por falha de conexão da LLM: {failed_summary}."
+        ).strip()
     else:
         _ = build_coordinator_excerpt(
             total_chunks=len(prepared_document.chunks),

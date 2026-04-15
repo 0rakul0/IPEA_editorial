@@ -7,8 +7,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 DEFAULT_OPENAI_MODEL = "gpt-5.2"
-DEFAULT_LLM_MAX_RETRIES = 3
+DEFAULT_LLM_MAX_RETRIES = 1
 DEFAULT_LLM_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_LLM_TIMEOUT_SECONDS = 30.0
+DEFAULT_GRAMMAR_AGENT_MAX_WORKERS = 3
 
 
 def _load_env() -> None:
@@ -118,6 +120,28 @@ def get_llm_retry_config() -> dict[str, int | float]:
     }
 
 
+def get_llm_timeout_seconds() -> float:
+    _load_env()
+
+    raw_timeout = (os.getenv("LLM_TIMEOUT_SECONDS") or "").strip()
+    try:
+        timeout_seconds = max(1.0, float(raw_timeout)) if raw_timeout else DEFAULT_LLM_TIMEOUT_SECONDS
+    except ValueError:
+        timeout_seconds = DEFAULT_LLM_TIMEOUT_SECONDS
+    return timeout_seconds
+
+
+def get_grammar_agent_max_workers() -> int:
+    _load_env()
+
+    raw_workers = (os.getenv("GRAMMAR_AGENT_MAX_WORKERS") or "").strip()
+    try:
+        workers = max(1, int(raw_workers)) if raw_workers else DEFAULT_GRAMMAR_AGENT_MAX_WORKERS
+    except ValueError:
+        workers = DEFAULT_GRAMMAR_AGENT_MAX_WORKERS
+    return workers
+
+
 def get_chat_model():
     models = get_chat_models()
     return models[0][1] if models else None
@@ -130,11 +154,14 @@ def get_chat_models():
         return []
 
     out = []
+    timeout_seconds = get_llm_timeout_seconds()
     for config in get_llm_candidate_configs():
         kwargs: dict[str, str | int | float] = {
             "model": config["model"],
             "temperature": 0,
             "api_key": config["api_key"] or "local",
+            "timeout": timeout_seconds,
+            "max_retries": 0,
         }
         if config["base_url"]:
             kwargs["base_url"] = config["base_url"]

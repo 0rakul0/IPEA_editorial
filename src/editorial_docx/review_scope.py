@@ -176,7 +176,14 @@ def _agent_scope_indexes(agent: str, chunks: list[str], refs: list[str], section
         return picked or typed or head_20
 
     if agent == "gramatica_ortografia":
-        return all_indexes
+        reference_heading_idx = next((idx for idx, ref in enumerate(refs) if _ref_block_type(ref) == "reference_heading"), total)
+        body_like = [
+            idx
+            for idx in range(reference_heading_idx)
+            if _ref_block_type(refs[idx] if idx < len(refs) else "") in {"paragraph", "abstract_body"}
+            and len((chunks[idx] or "").strip()) >= 40
+        ]
+        return body_like or all_indexes
 
     return all_indexes
 

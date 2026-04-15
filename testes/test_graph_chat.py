@@ -1,4 +1,6 @@
 from pathlib import Path
+import threading
+import time
 from zipfile import ZIP_DEFLATED, ZipFile
 import sys
 import json
@@ -121,7 +123,7 @@ def test_parse_comment_reviews_accepts_valid_json():
 def test_review_comments_with_llm_filters_rejected_comments(monkeypatch):
     comments = [
         AgentComment(
-            agent="gramatica_ortografia",
+            agent="sinopse_abstract",
             category="Concordância",
             message="A concordância verbal está incorreta neste fragmento.",
             paragraph_index=8,
@@ -129,7 +131,7 @@ def test_review_comments_with_llm_filters_rejected_comments(monkeypatch):
             suggested_fix="e sugere",
         ),
         AgentComment(
-            agent="gramatica_ortografia",
+            agent="sinopse_abstract",
             category="Estilo",
             message="Há repetição imediata do mesmo termo.",
             paragraph_index=21,
@@ -162,7 +164,7 @@ def test_review_comments_with_llm_filters_rejected_comments(monkeypatch):
 
     approved, status = _review_comments_with_llm(
         comments,
-        agent="gramatica_ortografia",
+        agent="sinopse_abstract",
         question="Revise",
         excerpt="[8] (...) e sugerem\n[21] (...) tem o objetivo de",
         profile_key="TD",
@@ -1350,15 +1352,36 @@ def test_invoke_with_model_fallback_uses_secondary_provider_after_openai_failure
 
 def test_run_conversation_returns_partial_result_when_connection_fails(monkeypatch):
     class FakeAgentApp:
+        def __init__(self, agent_name):
+            self.agent_name = agent_name
+
         def stream(self, initial_state, stream_mode="updates"):
+            if self.agent_name == "sinopse_abstract":
+                yield {
+                    "sinopse_abstract": {
+                        "comments": initial_state["comments"],
+                        "batch_status": "falha de conexão da LLM após retries: falha de DNS/conectividade (`getaddrinfo failed`)",
+                        "llm_raw_comment_count": 0,
+                        "llm_post_review_comment_count": 0,
+                    }
+                }
+                return
             yield {
-                "sinopse_abstract": {
+                "gramatica_ortografia": {
                     "comments": initial_state["comments"],
-                    "batch_status": "falha de conexão da LLM após retries: falha de DNS/conectividade (`getaddrinfo failed`)",
+                    "batch_status": "ok",
+                    "llm_raw_comment_count": 0,
+                    "llm_post_review_comment_count": 0,
                 }
             }
 
-    monkeypatch.setattr(graph_chat_module, "_build_graph", lambda agent_order, include_coordinator=False: FakeAgentApp())
+    monkeypatch.setattr(
+        graph_chat_module,
+        "_build_graph",
+        lambda agent_order, include_coordinator=False: FakeAgentApp(agent_order[0]),
+    )
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
 
     result = run_conversation(
         paragraphs=["SINOPSE", "Texto de teste."],
@@ -1369,9 +1392,179 @@ def test_run_conversation_returns_partial_result_when_connection_fails(monkeypat
     )
 
     assert result.comments == []
-    assert "Resumo parcial" in result.answer
+    assert "Avisos de execução:" in result.answer
     assert "sinopse_abstract" in result.answer
     assert "falha de conexão da LLM" in result.answer
+    trace_by_agent = {item.agent: item for item in result.trace.agents}
+    assert trace_by_agent["sinopse_abstract"].failed is True
+    assert "falha de conexão da LLM" in trace_by_agent["sinopse_abstract"].failure_status
+
+
+def test_run_conversation_continues_with_next_agent_after_connection_failure(monkeypatch):
+    class FakeAgentApp:
+        def __init__(self, agent_name):
+            self.agent_name = agent_name
+
+        def stream(self, initial_state, stream_mode="updates"):
+            if self.agent_name == "sinopse_abstract":
+                yield {
+                    "sinopse_abstract": {
+                        "comments": initial_state["comments"],
+                        "batch_status": "falha de conexão da LLM após retries: timeout",
+                        "llm_raw_comment_count": 0,
+                        "llm_post_review_comment_count": 0,
+                    }
+                }
+                return
+            yield {
+                "gramatica_ortografia": {
+                    "comments": [
+                        *initial_state["comments"],
+                        AgentComment(
+                            agent="gramatica_ortografia",
+                            category="Regência",
+                            message="Falta a preposição na locução verbal.",
+                            paragraph_index=1,
+                            issue_excerpt="passou ser",
+                            suggested_fix="passou a ser",
+                        ),
+                    ],
+                    "batch_status": "ok",
+                    "llm_raw_comment_count": 1,
+                    "llm_post_review_comment_count": 1,
+                }
+            }
+
+    monkeypatch.setattr(
+        graph_chat_module,
+        "_build_graph",
+        lambda agent_order, include_coordinator=False: FakeAgentApp(agent_order[0]),
+    )
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
+
+    result = run_conversation(
+        paragraphs=["SINOPSE", "O texto passou ser revisado."],
+        refs=["parágrafo 1 | tipo=abstract_heading", "parágrafo 2 | tipo=abstract_body | align=justify"],
+        sections=[],
+        question="Revise",
+        selected_agents=["sinopse_abstract", "gramatica_ortografia"],
+    )
+
+    assert any(item.issue_excerpt == "passou ser" for item in result.comments)
+    assert "Avisos de execução:" in result.answer
+    assert "sinopse_abstract" in result.answer
+    trace_by_agent = {item.agent: item for item in result.trace.agents}
+    assert trace_by_agent["gramatica_ortografia"].llm_raw_comment_count >= 1
+    assert trace_by_agent["gramatica_ortografia"].llm_validated_comment_count >= 1
+
+
+def test_run_conversation_continues_next_batch_after_connection_failure(monkeypatch):
+    class FakeAgentApp:
+        def stream(self, initial_state, stream_mode="updates"):
+            excerpt = initial_state["document_excerpt"]
+            if "[0]" in excerpt:
+                yield {
+                    "gramatica_ortografia": {
+                        "comments": initial_state["comments"],
+                        "batch_status": "falha de conexão da LLM após retries: timeout",
+                        "llm_raw_comment_count": 0,
+                        "llm_post_review_comment_count": 0,
+                    }
+                }
+                return
+            yield {
+                "gramatica_ortografia": {
+                    "comments": [
+                        *initial_state["comments"],
+                        AgentComment(
+                            agent="gramatica_ortografia",
+                            category="Regência",
+                            message="Falta a preposição na locução verbal.",
+                            paragraph_index=1,
+                            issue_excerpt="passou ser",
+                            suggested_fix="passou a ser",
+                        ),
+                    ],
+                    "batch_status": "ok",
+                    "llm_raw_comment_count": 1,
+                    "llm_post_review_comment_count": 1,
+                }
+            }
+
+    monkeypatch.setattr(graph_chat_module, "_build_graph", lambda agent_order, include_coordinator=False: FakeAgentApp())
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
+
+    result = run_conversation(
+        paragraphs=["Primeiro parágrafo.", "O texto passou ser revisado."],
+        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=paragraph"],
+        sections=[],
+        question="Revise",
+        selected_agents=["gramatica_ortografia"],
+    )
+
+    assert any(item.issue_excerpt == "passou ser" for item in result.comments)
+    trace = next(item for item in result.trace.agents if item.agent == "gramatica_ortografia")
+    assert len(trace.batches) >= 2
+    assert trace.batches[0].status.startswith("falha de conexão da LLM")
+    assert trace.batches[1].visible_comment_count == 1
+    assert trace.batches[1].llm_validated_comment_count + trace.batches[1].heuristic_accepted_comment_count == 1
+
+
+def test_run_conversation_parallelizes_grammar_batches_with_low_concurrency(monkeypatch):
+    state = {"active": 0, "max_active": 0}
+    lock = threading.Lock()
+
+    class FakeAgentApp:
+        def stream(self, initial_state, stream_mode="updates"):
+            excerpt = initial_state["document_excerpt"]
+            marker = excerpt.split("[", 1)[1].split("]", 1)[0]
+            batch_idx = int(marker)
+            with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            try:
+                time.sleep(0.05)
+                yield {
+                    "gramatica_ortografia": {
+                        "comments": [
+                            *initial_state["comments"],
+                            AgentComment(
+                                agent="gramatica_ortografia",
+                                category="Regência",
+                                message="Falta a preposição na locução verbal.",
+                                paragraph_index=batch_idx,
+                                issue_excerpt=f"erro {batch_idx}",
+                                suggested_fix=f"ajuste {batch_idx}",
+                            ),
+                        ],
+                        "batch_status": "ok",
+                        "llm_raw_comment_count": 1,
+                        "llm_post_review_comment_count": 1,
+                    }
+                }
+            finally:
+                with lock:
+                    state["active"] -= 1
+
+    monkeypatch.setattr(graph_chat_module, "_build_graph", lambda agent_order, include_coordinator=False: FakeAgentApp())
+    monkeypatch.setattr(graph_chat_module, "_parallel_batch_workers", lambda agent, batch_count: 2 if agent == "gramatica_ortografia" else 1)
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
+
+    result = run_conversation(
+        paragraphs=["Parágrafo com erro 0.", "Parágrafo com erro 1.", "Parágrafo com erro 2."],
+        refs=["parágrafo 1 | tipo=paragraph", "parágrafo 2 | tipo=paragraph", "parágrafo 3 | tipo=paragraph"],
+        sections=[],
+        question="Revise",
+        selected_agents=["gramatica_ortografia"],
+    )
+
+    trace = next(item for item in result.trace.agents if item.agent == "gramatica_ortografia")
+    assert state["max_active"] >= 2
+    assert len(trace.batches) == 3
+    assert trace.llm_raw_comment_count == 3
 
 
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():
@@ -1932,6 +2125,42 @@ def test_normalize_batch_comments_matches_reference_with_historical_year_in_titl
     )
 
     assert all(item.category != "citation_match" for item in normalized)
+
+
+def test_heuristic_reference_comments_do_not_treat_historical_year_in_title_as_year_conflict():
+    comments = _heuristic_reference_comments(
+        batch_indexes=[2],
+        chunks=[
+            "Texto de abertura.",
+            "Referências",
+            "LEVY, Maria Stella Ferreira. O papel da migração internacional na evolução da população brasileira (1872 a 1972). Revista de Saúde Pública, v. 8, n. 1, p. 49-90, 1974.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert all("ano informado na abertura" not in item.message for item in comments)
+
+
+def test_heuristic_reference_comments_adds_online_access_date_issue_from_abnt_validator():
+    comments = _heuristic_reference_comments(
+        batch_indexes=[2],
+        chunks=[
+            "Texto de abertura.",
+            "Referências",
+            "IPEA. Catálogo de publicações. Brasília: Ipea, 2024. Disponível em: https://example.com/catalogo.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=paragraph",
+            "parágrafo 2 | tipo=reference_heading",
+            "parágrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert any("Acesso em:" in item.suggested_fix for item in comments)
 
 
 def test_normalize_batch_comments_matches_parenthetical_multi_author_reference_case_insensitively():

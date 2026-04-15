@@ -24,6 +24,39 @@ def _serialize_comment(comment) -> dict[str, object]:
     }
 
 
+def _serialize_trace(trace) -> dict[str, object]:
+    return {
+        "agents": [
+            {
+                "agent": agent.agent,
+                "agent_label": agent_short_label(agent.agent),
+                "failed": agent.failed,
+                "failure_status": agent.failure_status,
+                "llm_raw_comment_count": agent.llm_raw_comment_count,
+                "llm_post_review_comment_count": agent.llm_post_review_comment_count,
+                "llm_validated_comment_count": agent.llm_validated_comment_count,
+                "llm_rejected_comment_count": agent.llm_rejected_comment_count,
+                "heuristic_accepted_comment_count": agent.heuristic_accepted_comment_count,
+                "batches": [
+                    {
+                        "batch_index": batch.batch_index,
+                        "total_batches": batch.total_batches,
+                        "status": batch.status,
+                        "llm_raw_comment_count": batch.llm_raw_comment_count,
+                        "llm_post_review_comment_count": batch.llm_post_review_comment_count,
+                        "llm_validated_comment_count": batch.llm_validated_comment_count,
+                        "llm_rejected_comment_count": batch.llm_rejected_comment_count,
+                        "heuristic_accepted_comment_count": batch.heuristic_accepted_comment_count,
+                        "visible_comment_count": batch.visible_comment_count,
+                    }
+                    for batch in agent.batches
+                ],
+            }
+            for agent in trace.agents
+        ]
+    }
+
+
 def _history_stamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -85,6 +118,7 @@ def main() -> int:
 
     model_tag = get_llm_model_tag()
     output_json = args.output_json or base.parent / f"{base.name}_output_{model_tag}.relatorio.json"
+    output_diagnostics_json = output_json.with_name(f"{output_json.stem}.diagnostics.json")
     json_text = json.dumps(
         [_serialize_comment(c) for c in visible_comments],
         ensure_ascii=False,
@@ -92,6 +126,9 @@ def main() -> int:
     )
     output_json.write_text(json_text, encoding="utf-8")
     history_json = _write_history_snapshot(output_json, json_text)
+    diagnostics_text = json.dumps(_serialize_trace(result.trace), ensure_ascii=False, indent=2)
+    output_diagnostics_json.write_text(diagnostics_text, encoding="utf-8")
+    history_diagnostics = _write_history_snapshot(output_diagnostics_json, diagnostics_text)
 
     if loaded.kind == "docx":
         output_docx = args.output_docx or base.parent / f"{base.name}_output_{model_tag}.docx"
@@ -103,6 +140,8 @@ def main() -> int:
 
     print(f"Relatório JSON: {output_json}")
     print(f"Histórico JSON: {history_json}")
+    print(f"Diagnóstico JSON: {output_diagnostics_json}")
+    print(f"Histórico diagnóstico JSON: {history_diagnostics}")
     print(f"Normalized JSON: {output_normalized_json}")
     print(f"Histórico normalized JSON: {history_normalized}")
     print(f"Comentários visíveis: {len(visible_comments)}")
@@ -110,7 +149,7 @@ def main() -> int:
         "Camada verificadora: "
         f"{result.verification.accepted_count} aceitos, {result.verification.rejected_count} rejeitados"
     )
-    if (result.answer or "").startswith("Resumo parcial"):
+    if (result.answer or "").startswith("Resumo parcial") or "Avisos de execução:" in (result.answer or ""):
         print(result.answer.splitlines()[0])
     return 0
 

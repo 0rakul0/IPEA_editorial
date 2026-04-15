@@ -649,7 +649,7 @@ def _normalize_batch_comments(
     return accepted
 
 
-_REVIEWER_ENABLED_AGENTS = {"sinopse_abstract", "gramatica_ortografia"}
+_REVIEWER_ENABLED_AGENTS = {"sinopse_abstract"}
 
 
 def _review_comments_with_llm(

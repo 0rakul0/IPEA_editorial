@@ -49,6 +49,26 @@ def _build_batches(
     )
 
 
+def _build_agent_batches(
+    agent: str,
+    *,
+    chunks: list[str],
+    refs: list[str],
+    indexes: list[int],
+    max_chars: int,
+    max_chunks: int,
+) -> list[list[int]]:
+    if agent == "gramatica_ortografia":
+        return [[idx] for idx in indexes if 0 <= idx < len(chunks)]
+    return _build_batches(
+        chunks=chunks,
+        refs=refs,
+        indexes=indexes,
+        max_chars=max_chars,
+        max_chunks=max_chunks,
+    )
+
+
 def _window_indexes(indexes: list[int], total: int, radius: int = 2) -> list[int]:
     if not indexes or total <= 0:
         return []
@@ -96,7 +116,8 @@ def prepare_review_document(
 
     for agent in agent_order:
         scoped_indexes = agent_scope_builder(agent, chunks, refs, sections)
-        raw_batches = _build_batches(
+        raw_batches = _build_agent_batches(
+            agent,
             chunks=chunks,
             refs=refs,
             indexes=scoped_indexes,

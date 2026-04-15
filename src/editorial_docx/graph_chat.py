@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from .agents.user_reference_agent import USER_REFERENCE_AGENT
-from .llm import get_chat_model, get_chat_models, get_llm_retry_config
-from .models import AgentComment, ConversationResult, VerificationDecision
+from .llm import get_chat_model, get_chat_models, get_grammar_agent_max_workers, get_llm_retry_config
+from .models import (
+    AgentBatchTrace,
+    AgentComment,
+    AgentExecutionTrace,
+    ConversationResult,
+    ExecutionTrace,
+    VerificationDecision,
+)
 from .prompts import build_agent_prompt, build_comment_review_prompt
 from .review_coordinator import coordinate_answer
 from .review_heuristics import _find_reference_citation_indexes, _heuristic_reference_comments, _heuristic_reference_global_comments
@@ -87,8 +95,9 @@ def _invoke_with_model_fallback(prompt, payload: dict[str, str], operation: str)
     return None
 
 
-_REVIEWER_ENABLED_AGENTS = {"sinopse_abstract", "gramatica_ortografia"}
+_REVIEWER_ENABLED_AGENTS = {"sinopse_abstract"}
 _build_graph = _default_build_graph
+_PARALLEL_BATCH_AGENTS = {"gramatica_ortografia"}
 
 
 def _review_comments_with_llm(
@@ -136,6 +145,99 @@ def _review_comments_with_llm(
         approved.append(comment)
 
     return approved, f"{status} | revisor: {len(approved)} aprovados, {rejected} rejeitados"
+
+
+def _parallel_batch_workers(agent: str, batch_count: int) -> int:
+    if agent not in _PARALLEL_BATCH_AGENTS:
+        return 1
+    return max(1, min(batch_count, get_grammar_agent_max_workers()))
+
+
+def _execute_agent_batch(
+    *,
+    agent: str,
+    batch_idx: int,
+    total_batches: int,
+    batch,
+    prepared_document,
+    question: str,
+    profile_key: str,
+    existing_comments: list[AgentComment],
+    running_summary: str,
+):
+    excerpt = _build_batch_review_excerpt(prepared=prepared_document, batch=batch, running_summary=running_summary)
+    comments_before_batch = len(existing_comments)
+    accepted_in_batch = []
+    batch_decisions: list[VerificationDecision] = []
+    batch_failed = False
+    batch_status = ""
+    llm_raw_comment_count = 0
+    llm_post_review_comment_count = 0
+    local_app = _build_graph([agent], include_coordinator=False)
+    initial_state = {
+        "question": question,
+        "document_excerpt": excerpt,
+        "running_summary": running_summary,
+        "profile_key": profile_key,
+        "comments": existing_comments,
+        "answer": "",
+    }
+
+    for update in local_app.stream(initial_state, stream_mode="updates"):
+        if not update:
+            continue
+        node, payload = next(iter(update.items()))
+        if not isinstance(payload, dict) or node != agent:
+            continue
+
+        current_comments = payload.get("comments", existing_comments)
+        if isinstance(current_comments, list):
+            old_comments = current_comments[:comments_before_batch]
+            batch_comments = current_comments[comments_before_batch:]
+            verified_comments, batch_decisions = _verify_batch_comments(
+                comments=batch_comments,
+                agent=agent,
+                batch_indexes=batch.indexes,
+                chunks=prepared_document.chunks,
+                refs=prepared_document.refs,
+                existing_comments=old_comments,
+                batch_index=batch_idx,
+            )
+            accepted_in_batch = verified_comments
+        else:
+            batch_decisions = []
+
+        batch_status = _format_batch_status(str(payload.get("batch_status", "") or ""), batch_decisions)
+        llm_raw_comment_count = int(payload.get("llm_raw_comment_count", 0) or 0)
+        llm_post_review_comment_count = int(payload.get("llm_post_review_comment_count", llm_raw_comment_count) or 0)
+        if "falha de conexao da llm" in _folded_text(batch_status):
+            batch_failed = True
+            break
+
+    llm_validated_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and decision.accepted)
+    llm_rejected_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and not decision.accepted)
+    heuristic_accepted_comment_count = sum(1 for decision in batch_decisions if decision.source == "heuristic" and decision.accepted)
+    batch_trace = AgentBatchTrace(
+        agent=agent,
+        batch_index=batch_idx,
+        total_batches=total_batches,
+        status=batch_status,
+        llm_raw_comment_count=llm_raw_comment_count,
+        llm_post_review_comment_count=llm_post_review_comment_count,
+        llm_validated_comment_count=llm_validated_comment_count,
+        llm_rejected_comment_count=llm_rejected_comment_count,
+        heuristic_accepted_comment_count=heuristic_accepted_comment_count,
+        visible_comment_count=len(accepted_in_batch),
+    )
+    return {
+        "batch_index": batch_idx,
+        "batch": batch,
+        "accepted_comments": accepted_in_batch,
+        "batch_decisions": batch_decisions,
+        "batch_failed": batch_failed,
+        "batch_status": batch_status,
+        "batch_trace": batch_trace,
+    }
 
 
 def _reference_entry_texts(chunks: list[str], refs: list[str]) -> list[str]:
@@ -315,12 +417,12 @@ def run_prepared_review(
     if not prepared_document.chunks:
         return ConversationResult(answer="Documento vazio ou sem texto extraído.", comments=[])
 
-    agent_apps = {agent: _build_graph([agent], include_coordinator=False) for agent in agent_order}
+    agent_apps = {agent: _build_graph([agent], include_coordinator=False) for agent in agent_order if _parallel_batch_workers(agent, len(prepared_document.agent_batches.get(agent, []))) == 1}
     final_comments = []
     verification_decisions = []
     running_summaries = {agent: "" for agent in agent_order}
-    interrupted_reason = ""
-    interrupted_agent = ""
+    failed_agents = []
+    trace_by_agent = {agent: AgentExecutionTrace(agent=agent) for agent in agent_order}
 
     for agent in agent_order:
         if agent == USER_REFERENCE_AGENT:
@@ -344,11 +446,75 @@ def run_prepared_review(
         if not batches:
             continue
 
-        stop_processing = False
+        if _parallel_batch_workers(agent, len(batches)) > 1:
+            worker_count = _parallel_batch_workers(agent, len(batches))
+            base_comments = final_comments[:]
+            batch_results = []
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix=f"review-{agent}") as executor:
+                futures = [
+                    executor.submit(
+                        _execute_agent_batch,
+                        agent=agent,
+                        batch_idx=batch_idx,
+                        total_batches=len(batches),
+                        batch=batch,
+                        prepared_document=prepared_document,
+                        question=question,
+                        profile_key=profile_key,
+                        existing_comments=base_comments,
+                        running_summary=running_summaries.get(agent, ""),
+                    )
+                    for batch_idx, batch in enumerate(batches, start=1)
+                ]
+                for future in as_completed(futures):
+                    batch_results.append(future.result())
+
+            for result in sorted(batch_results, key=lambda item: item["batch_index"]):
+                batch_idx = result["batch_index"]
+                batch = result["batch"]
+                accepted_in_batch = result["accepted_comments"]
+                batch_decisions = result["batch_decisions"]
+                batch_status = result["batch_status"]
+                batch_trace = result["batch_trace"]
+                batch_failed = result["batch_failed"]
+
+                final_comments.extend(accepted_in_batch)
+                verification_decisions.extend(batch_decisions)
+                trace_by_agent[agent].batches.append(batch_trace)
+                trace_by_agent[agent].llm_raw_comment_count += batch_trace.llm_raw_comment_count
+                trace_by_agent[agent].llm_post_review_comment_count += batch_trace.llm_post_review_comment_count
+                trace_by_agent[agent].llm_validated_comment_count += batch_trace.llm_validated_comment_count
+                trace_by_agent[agent].llm_rejected_comment_count += batch_trace.llm_rejected_comment_count
+                trace_by_agent[agent].heuristic_accepted_comment_count += batch_trace.heuristic_accepted_comment_count
+
+                total = len(final_comments)
+                new_count = sum(1 for decision in batch_decisions if decision.accepted)
+                if on_agent_done is not None:
+                    on_agent_done(agent, new_count, total)
+                if on_agent_batch_status is not None:
+                    on_agent_batch_status(agent, batch_idx, len(batches), batch_status)
+                if on_agent_progress is not None:
+                    on_agent_progress(agent, batch_idx, len(batches), new_count, total)
+                if batch_failed:
+                    failed_agents.append((agent, batch_status))
+                    trace_by_agent[agent].failed = True
+                    trace_by_agent[agent].failure_status = batch_status
+                    continue
+
+                running_summaries[agent] = _update_running_summary(
+                    agent=agent,
+                    question=question,
+                    running_summary=running_summaries.get(agent, ""),
+                    batch=batch,
+                    accepted_comments=accepted_in_batch,
+                )
+            continue
+
         for batch_idx, batch in enumerate(batches, start=1):
             excerpt = _build_batch_review_excerpt(prepared=prepared_document, batch=batch, running_summary=running_summaries.get(agent, ""))
             comments_before_batch = len(final_comments)
             accepted_in_batch = []
+            batch_failed = False
             initial_state = {
                 "question": question,
                 "document_excerpt": excerpt,
@@ -384,6 +550,30 @@ def run_prepared_review(
                     batch_decisions = []
 
                 batch_status = _format_batch_status(str(payload.get("batch_status", "") or ""), batch_decisions)
+                llm_raw_comment_count = int(payload.get("llm_raw_comment_count", 0) or 0)
+                llm_post_review_comment_count = int(payload.get("llm_post_review_comment_count", llm_raw_comment_count) or 0)
+                llm_validated_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and decision.accepted)
+                llm_rejected_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and not decision.accepted)
+                heuristic_accepted_comment_count = sum(1 for decision in batch_decisions if decision.source == "heuristic" and decision.accepted)
+                trace_by_agent[agent].batches.append(
+                    AgentBatchTrace(
+                        agent=agent,
+                        batch_index=batch_idx,
+                        total_batches=len(batches),
+                        status=batch_status,
+                        llm_raw_comment_count=llm_raw_comment_count,
+                        llm_post_review_comment_count=llm_post_review_comment_count,
+                        llm_validated_comment_count=llm_validated_comment_count,
+                        llm_rejected_comment_count=llm_rejected_comment_count,
+                        heuristic_accepted_comment_count=heuristic_accepted_comment_count,
+                        visible_comment_count=len(accepted_in_batch),
+                    )
+                )
+                trace_by_agent[agent].llm_raw_comment_count += llm_raw_comment_count
+                trace_by_agent[agent].llm_post_review_comment_count += llm_post_review_comment_count
+                trace_by_agent[agent].llm_validated_comment_count += llm_validated_comment_count
+                trace_by_agent[agent].llm_rejected_comment_count += llm_rejected_comment_count
+                trace_by_agent[agent].heuristic_accepted_comment_count += heuristic_accepted_comment_count
                 total = len(final_comments)
                 new_count = sum(1 for decision in batch_decisions if decision.accepted)
                 if on_agent_done is not None:
@@ -393,13 +583,14 @@ def run_prepared_review(
                 if on_agent_progress is not None:
                     on_agent_progress(agent, batch_idx, len(batches), new_count, total)
                 if "falha de conexao da llm" in _folded_text(batch_status):
-                    interrupted_reason = batch_status
-                    interrupted_agent = agent
-                    stop_processing = True
-                    break
+                    failed_agents.append((agent, batch_status))
+                    trace_by_agent[agent].failed = True
+                    trace_by_agent[agent].failure_status = batch_status
+                    batch_failed = True
+                    continue
 
-            if stop_processing:
-                break
+            if batch_failed:
+                continue
 
             running_summaries[agent] = _update_running_summary(
                 agent=agent,
@@ -409,18 +600,16 @@ def run_prepared_review(
                 accepted_comments=accepted_in_batch,
             )
 
-        if stop_processing:
-            break
-
     consolidated_comments = _consolidate_final_comments(final_comments, prepared_document.refs)
 
-    if interrupted_reason:
-        final_answer = _partial_answer_from_comments(
-            consolidated_comments,
-            "Resumo parcial (execução interrompida por falha de conexão da LLM"
-            + (f" no agente {interrupted_agent}" if interrupted_agent else "")
-            + f": {interrupted_reason}).",
-        )
+    if failed_agents:
+        failed_summary = "; ".join(f"{agent}: {status}" for agent, status in failed_agents)
+        base_answer = coordinate_answer(question=question, comments=consolidated_comments)
+        final_answer = (
+            (base_answer or "").rstrip()
+            + "\n\n"
+            + f"Avisos de execução: alguns agentes ficaram indisponíveis por falha de conexão da LLM: {failed_summary}."
+        ).strip()
     else:
         final_answer = coordinate_answer(question=question, comments=consolidated_comments)
 
@@ -428,6 +617,7 @@ def run_prepared_review(
         answer=final_answer,
         comments=consolidated_comments,
         verification=_summarize_verification(verification_decisions),
+        trace=ExecutionTrace(agents=[trace_by_agent[agent] for agent in agent_order]),
     )
 
 

@@ -33,3 +33,4 @@ dist/
 *_output.relatorio.json
 /testes/historico
 /testes/benchmarks
+/testes

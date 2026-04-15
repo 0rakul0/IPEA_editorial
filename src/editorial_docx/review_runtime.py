@@ -175,7 +175,7 @@ def _update_running_summary(
     accepted_comments: list[AgentComment],
 ) -> str:
     fallback = _deterministic_progressive_summary(agent, running_summary, batch, accepted_comments)
-    if get_chat_model() is None:
+    if agent == "gramatica_ortografia" or get_chat_model() is None:
         return fallback
 
     prompt = ChatPromptTemplate.from_messages(
@@ -450,10 +450,10 @@ def build_coordinator_answer(question: str, comments: list[AgentComment]) -> str
     except LLMConnectionFailure as exc:
         return _partial_answer_from_comments(
             comments,
-            f"Resumo parcial (coordenador indisponível por conexão: {_connection_error_summary(exc.original)}).",
+            f"Resumo dos agentes (coordenador indisponível por conexão: {_connection_error_summary(exc.original)}).",
         )
     except Exception:
-        return _partial_answer_from_comments(comments, "Resumo parcial (coordenador indisponível).")
+        return _partial_answer_from_comments(comments, "Resumo dos agentes (coordenador indisponível).")
 
     answer = response.content if isinstance(response.content, str) else str(response.content)
     return answer.strip() or _partial_answer_from_comments(comments, "Resumo dos agentes.")
