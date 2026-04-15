@@ -1,25 +1,13 @@
 from __future__ import annotations
 
-import re
-
+from ..agents.scopes import scope_indexes_for_agent
 from ..config import DEFAULT_REVIEW_MAX_BATCH_CHARS, DEFAULT_REVIEW_MAX_BATCH_CHUNKS
 from ..document_loader import Section
 from ..models import AgentComment, DocumentUserComment, agent_short_label
 from ..prompts import AGENT_ORDER
-from ..review_patterns import (
-    _find_metadata_like_indexes,
-    _heading_word_count,
-    _indexes_by_ref_type,
-    _is_implicit_heading_candidate,
-    _is_intro_heading,
-    _normalized_text,
-    _ref_block_type,
-    _ref_style_name,
-    _style_name_looks_explicit,
-)
+from ..review_patterns import _normalized_text, _ref_block_type
 from .consolidation import consolidate_semantic_comments
 from .context import PreparedReviewDocument, prepare_review_document as _prepare_review_document
-from ..review_heuristics import _find_reference_citation_indexes
 
 _USER_REFERENCE_AGENT = "comentarios_usuario_referencias"
 
@@ -60,32 +48,6 @@ def _build_batches(
     return batches
 
 
-def _expand_neighbors(indexes: list[int], total: int, radius: int = 1) -> list[int]:
-    expanded: set[int] = set()
-    for idx in indexes:
-        for candidate in range(max(0, idx - radius), min(total, idx + radius + 1)):
-            expanded.add(candidate)
-    return sorted(expanded)
-
-
-def _expand_section_ranges(sections: list[Section], keywords: tuple[str, ...]) -> list[int]:
-    selected: list[int] = []
-    for sec in sections:
-        title = sec.title.lower()
-        if any(k in title for k in keywords):
-            selected.extend(range(sec.start_idx, sec.end_idx + 1))
-    return sorted(dict.fromkeys(selected))
-
-
-def _find_content_indexes(chunks: list[str], pattern: str) -> list[int]:
-    rx = re.compile(pattern, re.IGNORECASE)
-    out: list[int] = []
-    for idx, chunk in enumerate(chunks):
-        if rx.search(chunk):
-            out.append(idx)
-    return out
-
-
 def _agent_scope_indexes(agent: str, chunks: list[str], refs: list[str], sections: list[Section]) -> list[int]:
     """Seleciona os índices mais relevantes do documento para cada agente."""
     total = len(chunks)
@@ -93,100 +55,7 @@ def _agent_scope_indexes(agent: str, chunks: list[str], refs: list[str], section
         return []
     if agent == _USER_REFERENCE_AGENT:
         return []
-
-    all_indexes = list(range(total))
-    head_20 = list(range(max(1, int(total * 0.20))))
-    tail_30_start = max(0, int(total * 0.70))
-    tail_30 = list(range(tail_30_start, total))
-
-    if agent == "metadados":
-        sec = _expand_section_ranges(sections, ("metadad", "ficha catalogr", "capa", "titulo", "autoria"))
-        head_candidates = _find_metadata_like_indexes(chunks, refs, limit=18)
-        picked = sorted(dict.fromkeys([*sec, *head_candidates]))
-        return picked or head_candidates or list(range(min(12, total)))
-
-    if agent == "sinopse_abstract":
-        sec = _expand_section_ranges(sections, ("sinopse", "abstract", "resumo", "summary"))
-        content = _find_content_indexes(chunks, r"\b(sinopse|abstract|resumo|summary|palavras-chave|keywords|jel)\b")
-        typed = _indexes_by_ref_type(refs, {"abstract_heading", "abstract_body", "keywords_label", "keywords_content", "jel_code"})
-        picked = _expand_neighbors(sorted(dict.fromkeys([*sec, *content, *typed])), total=total, radius=1)
-        return picked or head_20
-
-    if agent == "estrutura":
-        typed = _indexes_by_ref_type(refs, {"heading", "reference_heading"})
-        section_starts = sorted(dict.fromkeys(sec.start_idx for sec in sections))
-        intro_start = next(
-            (
-                idx
-                for idx, chunk in enumerate(chunks)
-                if _is_intro_heading(chunk) and _is_implicit_heading_candidate(idx, chunks, refs)
-            ),
-            None,
-        )
-        if intro_start is None:
-            intro_start = next(
-                (idx for idx in sorted(dict.fromkeys([*typed, *section_starts])) if 0 <= idx < len(chunks) and _is_intro_heading(chunks[idx])),
-                None,
-            )
-
-        implicit = [
-            idx
-            for idx in range(intro_start if intro_start is not None else 0, total)
-            if _is_implicit_heading_candidate(idx, chunks, refs)
-        ]
-        heading_candidates = sorted(dict.fromkeys([*typed, *section_starts, *implicit]))
-        if not heading_candidates:
-            return typed or head_20
-
-        scoped = [idx for idx in heading_candidates if intro_start is None or idx >= intro_start]
-        explicit_scoped = [idx for idx in scoped if idx in set(typed) or idx in set(section_starts)]
-        implicit_short_scoped = [
-            idx for idx in scoped if idx not in set(explicit_scoped) and 0 <= idx < len(chunks) and _heading_word_count(chunks[idx]) <= 4
-        ]
-        picked = sorted(dict.fromkeys([*explicit_scoped, *implicit_short_scoped]))
-        return picked or scoped or heading_candidates
-
-    if agent == "tabelas_figuras":
-        sec = _expand_section_ranges(sections, ("tabela", "figura", "quadro", "grafico", "gráfico", "anexo"))
-        content = _find_content_indexes(chunks, r"\b(tabela|figura|quadro|gr[aá]fico|imagem)\b")
-        typed = _indexes_by_ref_type(refs, {"caption", "table_cell"})
-        picked = _expand_neighbors(sorted(dict.fromkeys([*sec, *content, *typed])), total=total, radius=2)
-        return picked or typed or all_indexes
-
-    if agent == "referencias":
-        sec = _expand_section_ranges(sections, ("refer", "bibliograf", "references", "bibliography"))
-        reference_heading_idx = next((idx for idx, ref in enumerate(refs) if _ref_block_type(ref) == "reference_heading"), total)
-        citation_like = _find_reference_citation_indexes(chunks, refs, body_limit=reference_heading_idx)
-        if sec:
-            return sorted(dict.fromkeys([*citation_like, *sec]))
-        content = _find_content_indexes(chunks, r"\b(doi|http://|https://|et al\.|v\.\s*\d+|n\.\s*\d+)\b")
-        typed = _indexes_by_ref_type(refs, {"reference_entry", "reference_heading"})
-        picked = sorted(dict.fromkeys([*citation_like, *content, *typed]))
-        if not picked:
-            return tail_30
-        return picked
-
-    if agent == "tipografia":
-        typed = _indexes_by_ref_type(refs, {"heading", "caption", "reference_entry", "reference_heading"})
-        styled = [
-            idx
-            for idx, ref in enumerate(refs)
-            if _ref_block_type(ref) == "paragraph" and _style_name_looks_explicit(_ref_style_name(ref)) and idx < 24
-        ]
-        picked = sorted(dict.fromkeys([*typed, *styled]))
-        return picked or typed or head_20
-
-    if agent == "gramatica_ortografia":
-        reference_heading_idx = next((idx for idx, ref in enumerate(refs) if _ref_block_type(ref) == "reference_heading"), total)
-        body_like = [
-            idx
-            for idx in range(reference_heading_idx)
-            if _ref_block_type(refs[idx] if idx < len(refs) else "") in {"paragraph", "abstract_body"}
-            and len((chunks[idx] or "").strip()) >= 40
-        ]
-        return body_like or all_indexes
-
-    return all_indexes
+    return scope_indexes_for_agent(agent=agent, chunks=chunks, refs=refs, sections=sections, total=total)
 
 
 def prepare_review_batches(
