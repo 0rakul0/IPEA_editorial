@@ -15,7 +15,14 @@ class ProbableReferenceMatch:
 
 
 @dataclass(frozen=True)
+class ExactReferenceMatch:
+    citation: CitationCandidate
+    reference: ParsedReferenceEntry
+
+
+@dataclass(frozen=True)
 class ReferenceMatchResult:
+    exact_matches: tuple[ExactReferenceMatch, ...]
     probable_matches: tuple[ProbableReferenceMatch, ...]
     missing_citations: tuple[CitationCandidate, ...]
     uncited_references: tuple[ParsedReferenceEntry, ...]
@@ -66,6 +73,7 @@ def compare_citations_to_references(
     citations: list[CitationCandidate],
     references: list[ParsedReferenceEntry],
 ) -> ReferenceMatchResult:
+    exact_matches: list[ExactReferenceMatch] = []
     probable_matches: list[ProbableReferenceMatch] = []
     missing_citations: list[CitationCandidate] = []
     matched_reference_ids: set[int] = set()
@@ -82,6 +90,7 @@ def compare_citations_to_references(
         ]
         if exact_candidates:
             matched_reference_ids.update(id(entry) for entry in exact_candidates)
+            exact_matches.extend(ExactReferenceMatch(citation=citation, reference=entry) for entry in exact_candidates)
             glued_exact = next((entry for entry in exact_candidates if entry.has_glued_reference), None)
             if glued_exact is not None:
                 probable_matches.append(_build_probable_match(citation, glued_exact, match_type="format_problem"))
@@ -131,10 +140,11 @@ def compare_citations_to_references(
 
     uncited_references = tuple(entry for entry in references if id(entry) not in matched_reference_ids)
     return ReferenceMatchResult(
+        exact_matches=tuple(exact_matches),
         probable_matches=tuple(probable_matches),
         missing_citations=tuple(missing_citations),
         uncited_references=uncited_references,
     )
 
 
-__all__ = ["ProbableReferenceMatch", "ReferenceMatchResult", "compare_citations_to_references"]
+__all__ = ["ExactReferenceMatch", "ProbableReferenceMatch", "ReferenceMatchResult", "compare_citations_to_references"]

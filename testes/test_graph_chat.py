@@ -27,7 +27,7 @@ from editorial_docx.graph_chat import (
     run_conversation,
 )
 from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, agent_short_label
-from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, load_agent_instruction
+from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, build_agent_prompt, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
 from editorial_docx.pipeline.runtime import LLMConnectionFailure, build_coordinator_answer
 from editorial_docx.user_comment_refs import build_reference_search_requests
@@ -1602,13 +1602,14 @@ def test_run_conversation_continues_next_batch_after_connection_failure(monkeypa
     monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
     monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
 
+    long_prefix = "Texto analítico com contexto suficiente para revisão detalhada. " * 90
     result = run_conversation(
         paragraphs=[
-            "Primeiro parágrafo.",
-            "Segundo parágrafo.",
-            "Terceiro parágrafo.",
-            "Quarto parágrafo.",
-            "O texto passou ser revisado.",
+            long_prefix + "Primeiro parágrafo.",
+            long_prefix + "Segundo parágrafo.",
+            long_prefix + "Terceiro parágrafo.",
+            long_prefix + "Quarto parágrafo.",
+            long_prefix + "O texto passou ser revisado.",
         ],
         refs=[
             "parágrafo 1 | tipo=paragraph",
@@ -1624,13 +1625,13 @@ def test_run_conversation_continues_next_batch_after_connection_failure(monkeypa
 
     assert any(item.issue_excerpt == "passou ser" for item in result.comments)
     trace = next(item for item in result.trace.agents if item.agent == "gramatica_ortografia")
-    assert len(trace.batches) >= 2
+    assert len(trace.batches) == 1
     assert trace.batches[0].status.startswith("falha de conexão da LLM")
-    assert trace.batches[1].visible_comment_count == 1
-    assert trace.batches[1].llm_validated_comment_count + trace.batches[1].heuristic_accepted_comment_count == 1
+    assert trace.batches[0].heuristic_accepted_comment_count == 1
+    assert trace.failed is True
 
 
-def test_run_conversation_parallelizes_grammar_batches_with_low_concurrency(monkeypatch):
+def test_run_conversation_processes_grammar_batches_sequentially_by_default(monkeypatch):
     state = {"active": 0, "max_active": 0}
     lock = threading.Lock()
 
@@ -1667,18 +1668,18 @@ def test_run_conversation_parallelizes_grammar_batches_with_low_concurrency(monk
                     state["active"] -= 1
 
     monkeypatch.setattr(graph_chat_module, "_build_graph", lambda agent_order, include_coordinator=False: FakeAgentApp())
-    monkeypatch.setattr(graph_chat_module, "_parallel_batch_workers", lambda agent, batch_count: 2 if agent == "gramatica_ortografia" else 1)
     monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
     monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
 
+    long_prefix = "Texto analítico com contexto suficiente para revisão detalhada. " * 90
     result = run_conversation(
         paragraphs=[
-            "Parágrafo com erro 0.",
-            "Parágrafo com erro 1.",
-            "Parágrafo com erro 2.",
-            "Parágrafo com erro 3.",
-            "Parágrafo com erro 4.",
-            "Parágrafo com erro 5.",
+            long_prefix + "Parágrafo com erro 0.",
+            long_prefix + "Parágrafo com erro 1.",
+            long_prefix + "Parágrafo com erro 2.",
+            long_prefix + "Parágrafo com erro 3.",
+            long_prefix + "Parágrafo com erro 4.",
+            long_prefix + "Parágrafo com erro 5.",
         ],
         refs=[
             "parágrafo 1 | tipo=paragraph",
@@ -1694,9 +1695,9 @@ def test_run_conversation_parallelizes_grammar_batches_with_low_concurrency(monk
     )
 
     trace = next(item for item in result.trace.agents if item.agent == "gramatica_ortografia")
-    assert state["max_active"] >= 2
-    assert len(trace.batches) == 2
-    assert trace.llm_raw_comment_count == 2
+    assert state["max_active"] == 1
+    assert len(trace.batches) == 1
+    assert trace.llm_raw_comment_count == 1
 
 
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():
@@ -2346,6 +2347,28 @@ def test_heuristic_reference_comments_adds_online_access_date_issue_from_abnt_va
     )
 
     assert any("Acesso em:" in item.suggested_fix for item in comments)
+
+
+def test_normalize_batch_comments_flags_explicit_citation_placeholder_in_body_text():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="referencias",
+        batch_indexes=[0, 1, 2],
+        chunks=[
+            "A descricao historica do sistema ainda precisa da fonte primaria (XXX CITAR XXX) antes da versao final.",
+            "Referencias",
+            "SILVA, Joao. Estudo historico. Brasilia: Ipea, 1993.",
+        ],
+        refs=[
+            "paragrafo 1 | tipo=paragraph",
+            "paragrafo 2 | tipo=reference_heading",
+            "paragrafo 3 | tipo=reference_entry",
+        ],
+    )
+
+    assert any(item.category == "citation_placeholder" for item in normalized)
+    assert any(item.issue_excerpt == "(XXX CITAR XXX)" for item in normalized)
+    assert any("citacao autor-data correspondente" in item.suggested_fix for item in normalized)
 
 
 def test_normalize_batch_comments_matches_parenthetical_multi_author_reference_case_insensitively():
@@ -3392,6 +3415,18 @@ def test_grammar_td_prompt_restricts_style_and_optional_comma_claims():
     assert "não comentar redundância, repetição vocabular, concisão" in instruction
     assert "não comentar regência, preposição ou colocação pronominal quando a construção admitir variação culta plausível" in instruction
     assert "não pedir vírgula facultativa" in instruction
+    assert "especifica" in instruction
+    assert "específica" in instruction
+    assert "A palavra é proparoxítona e deve ser acentuada." in instruction
+
+
+def test_grammar_prompt_uses_compact_context_layout():
+    prompt = build_agent_prompt("gramatica_ortografia", "TD")
+    rendered = prompt.format(question="Revise", document_excerpt="TRECHO")
+
+    assert "texto inteiro enviado para esta passagem do agente de gramática e ortografia" in rendered
+    assert "duas zonas" not in rendered
+    assert "quatro zonas" not in rendered
 
 
 def test_sinopse_td_prompt_restricts_keywords_and_jel_count_claims():
@@ -3651,6 +3686,7 @@ def test_prepare_review_batches_builds_progressive_context_payload():
     excerpt = graph_chat_module._build_batch_review_excerpt(
         prepared=prepared,
         batch=batch,
+        agent="gramatica_ortografia",
         running_summary="Já verificado: abertura da seção.",
     )
 
@@ -3658,10 +3694,11 @@ def test_prepare_review_batches_builds_progressive_context_payload():
     assert batch.focus_excerpt
     assert batch.window_excerpt
     assert "1 Introdução" in batch.headings
-    assert "MAPA DO DOCUMENTO" in excerpt
-    assert "MEMÓRIA PROGRESSIVA DO AGENTE" in excerpt
-    assert "JANELA DE CONTEXTO" in excerpt
-    assert "TRECHO-ALVO DESTA PASSAGEM" in excerpt
+    assert "MAPA DO DOCUMENTO" not in excerpt
+    assert "MEMÓRIA PROGRESSIVA DO AGENTE" not in excerpt
+    assert "JANELA MÍNIMA DE CONTEXTO" not in excerpt
+    assert "TRECHO-ALVO DESTA PASSAGEM" not in excerpt
+    assert excerpt == batch.focus_excerpt
 
 
 def test_reference_scope_does_not_treat_common_noun_plus_year_as_citation():

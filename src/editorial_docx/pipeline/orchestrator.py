@@ -168,6 +168,7 @@ def run_prepared_review(
                 prepared=prepared_document,
                 batch=batch,
                 running_summary=running_summaries.get(agent, ""),
+                agent=agent,
             )
             comments_before_batch = len(final_comments)
             accepted_in_batch: list[AgentComment] = []
@@ -198,6 +199,7 @@ def run_prepared_review(
                         batch_indexes=batch.indexes,
                         chunks=prepared_document.chunks,
                         refs=prepared_document.refs,
+                        reference_pipeline=prepared_document.reference_pipeline,
                         existing_comments=old_comments,
                         batch_index=batch_idx,
                     )
