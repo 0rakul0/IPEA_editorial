@@ -34,7 +34,13 @@ from .pipeline.runtime import (
 )
 from .review_patterns import _folded_text
 from .pipeline.scope import _agent_scope_indexes, _consolidate_final_comments, prepare_review_batches
-from .pipeline.validation import _normalize_batch_comments, _summarize_verification, _verify_batch_comments, _format_batch_status
+from .pipeline.validation import (
+    _build_batch_verification_candidates,
+    _normalize_batch_comments,
+    _summarize_verification,
+    _verify_batch_comments,
+    _verify_comment_candidates,
+)
 from .user_comment_refs import (
     ReferenceSearchRequest,
     build_reference_search_requests,
@@ -153,6 +159,57 @@ def _parallel_batch_workers(agent: str, batch_count: int) -> int:
     return 1
 
 
+def _recompute_trace_metrics(
+    trace_by_agent: dict[str, AgentExecutionTrace],
+    decisions: list[VerificationDecision],
+) -> None:
+    per_batch: dict[tuple[str, int], dict[str, int]] = {}
+
+    for agent_trace in trace_by_agent.values():
+        agent_trace.llm_validated_comment_count = 0
+        agent_trace.llm_rejected_comment_count = 0
+        agent_trace.heuristic_accepted_comment_count = 0
+        for batch_trace in agent_trace.batches:
+            batch_trace.llm_validated_comment_count = 0
+            batch_trace.llm_rejected_comment_count = 0
+            batch_trace.heuristic_accepted_comment_count = 0
+            batch_trace.visible_comment_count = 0
+
+    for decision in decisions:
+        if decision.batch_index is None:
+            continue
+        key = (decision.comment.agent, decision.batch_index)
+        metrics = per_batch.setdefault(
+            key,
+            {
+                "llm_validated_comment_count": 0,
+                "llm_rejected_comment_count": 0,
+                "heuristic_accepted_comment_count": 0,
+                "visible_comment_count": 0,
+            },
+        )
+        if decision.accepted:
+            metrics["visible_comment_count"] += 1
+        if decision.source == "llm":
+            if decision.accepted:
+                metrics["llm_validated_comment_count"] += 1
+            else:
+                metrics["llm_rejected_comment_count"] += 1
+        if decision.source == "heuristic" and decision.accepted:
+            metrics["heuristic_accepted_comment_count"] += 1
+
+    for agent, agent_trace in trace_by_agent.items():
+        for batch_trace in agent_trace.batches:
+            metrics = per_batch.get((agent, batch_trace.batch_index), {})
+            batch_trace.llm_validated_comment_count = metrics.get("llm_validated_comment_count", 0)
+            batch_trace.llm_rejected_comment_count = metrics.get("llm_rejected_comment_count", 0)
+            batch_trace.heuristic_accepted_comment_count = metrics.get("heuristic_accepted_comment_count", 0)
+            batch_trace.visible_comment_count = metrics.get("visible_comment_count", 0)
+            agent_trace.llm_validated_comment_count += batch_trace.llm_validated_comment_count
+            agent_trace.llm_rejected_comment_count += batch_trace.llm_rejected_comment_count
+            agent_trace.heuristic_accepted_comment_count += batch_trace.heuristic_accepted_comment_count
+
+
 def _execute_agent_batch(
     *,
     agent: str,
@@ -172,8 +229,8 @@ def _execute_agent_batch(
         agent=agent,
     )
     comments_before_batch = len(existing_comments)
-    accepted_in_batch = []
-    batch_decisions: list[VerificationDecision] = []
+    collected_in_batch: list[AgentComment] = []
+    batch_candidates: list[tuple[str, AgentComment, int | None]] = []
     batch_failed = False
     batch_status = ""
     llm_raw_comment_count = 0
@@ -197,32 +254,25 @@ def _execute_agent_batch(
 
         current_comments = payload.get("comments", existing_comments)
         if isinstance(current_comments, list):
-            old_comments = current_comments[:comments_before_batch]
             batch_comments = current_comments[comments_before_batch:]
-            verified_comments, batch_decisions = _verify_batch_comments(
+            batch_candidates = _build_batch_verification_candidates(
                 comments=batch_comments,
                 agent=agent,
                 batch_indexes=batch.indexes,
                 chunks=prepared_document.chunks,
                 refs=prepared_document.refs,
                 reference_pipeline=prepared_document.reference_pipeline,
-                existing_comments=old_comments,
                 batch_index=batch_idx,
             )
-            accepted_in_batch = verified_comments
-        else:
-            batch_decisions = []
+            collected_in_batch = [candidate[1] for candidate in batch_candidates]
 
-        batch_status = _format_batch_status(str(payload.get("batch_status", "") or ""), batch_decisions)
+        batch_status = str(payload.get("batch_status", "") or "")
         llm_raw_comment_count = int(payload.get("llm_raw_comment_count", 0) or 0)
         llm_post_review_comment_count = int(payload.get("llm_post_review_comment_count", llm_raw_comment_count) or 0)
         if "falha de conexao da llm" in _folded_text(batch_status):
             batch_failed = True
             break
 
-    llm_validated_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and decision.accepted)
-    llm_rejected_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and not decision.accepted)
-    heuristic_accepted_comment_count = sum(1 for decision in batch_decisions if decision.source == "heuristic" and decision.accepted)
     batch_trace = AgentBatchTrace(
         agent=agent,
         batch_index=batch_idx,
@@ -230,19 +280,17 @@ def _execute_agent_batch(
         status=batch_status,
         llm_raw_comment_count=llm_raw_comment_count,
         llm_post_review_comment_count=llm_post_review_comment_count,
-        llm_validated_comment_count=llm_validated_comment_count,
-        llm_rejected_comment_count=llm_rejected_comment_count,
-        heuristic_accepted_comment_count=heuristic_accepted_comment_count,
-        visible_comment_count=len(accepted_in_batch),
+        visible_comment_count=len(collected_in_batch),
     )
     return {
         "batch_index": batch_idx,
         "batch": batch,
-        "accepted_comments": accepted_in_batch,
-        "batch_decisions": batch_decisions,
+        "accepted_comments": collected_in_batch,
+        "batch_decisions": [],
         "batch_failed": batch_failed,
         "batch_status": batch_status,
         "batch_trace": batch_trace,
+        "batch_candidates": batch_candidates,
     }
 
 
@@ -424,8 +472,10 @@ def run_prepared_review(
         return ConversationResult(answer="Documento vazio ou sem texto extraído.", comments=[])
 
     agent_apps = {agent: _build_graph([agent], include_coordinator=False) for agent in agent_order if _parallel_batch_workers(agent, len(prepared_document.agent_batches.get(agent, []))) == 1}
-    final_comments = []
-    verification_decisions = []
+    working_comments: list[AgentComment] = []
+    preserved_comments: list[AgentComment] = []
+    preserved_decisions: list[VerificationDecision] = []
+    deferred_candidates: list[tuple[str, AgentComment, int | None]] = []
     running_summaries = {agent: "" for agent in agent_order}
     failed_agents = []
     trace_by_agent = {agent: AgentExecutionTrace(agent=agent) for agent in agent_order}
@@ -436,13 +486,14 @@ def run_prepared_review(
                 prepared_document=prepared_document,
                 question=question,
                 profile_key=profile_key,
-                existing_comments=final_comments,
+                existing_comments=working_comments,
                 on_agent_done=on_agent_done,
                 on_agent_progress=on_agent_progress,
                 on_agent_batch_status=on_agent_batch_status,
             )
-            final_comments.extend(added_comments)
-            verification_decisions.extend(agent_decisions)
+            working_comments.extend(added_comments)
+            preserved_comments.extend(added_comments)
+            preserved_decisions.extend(agent_decisions)
             running_summaries[agent] = _truncate_progressive_summary(
                 _comment_memory_lines(added_comments) if added_comments else "(nenhuma referência adicional foi inserida a partir de comentários do usuário)"
             )
@@ -454,7 +505,7 @@ def run_prepared_review(
 
         if _parallel_batch_workers(agent, len(batches)) > 1:
             worker_count = _parallel_batch_workers(agent, len(batches))
-            base_comments = final_comments[:]
+            base_comments = working_comments[:]
             batch_results = []
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix=f"review-{agent}") as executor:
                 futures = [
@@ -478,23 +529,20 @@ def run_prepared_review(
             for result in sorted(batch_results, key=lambda item: item["batch_index"]):
                 batch_idx = result["batch_index"]
                 batch = result["batch"]
-                accepted_in_batch = result["accepted_comments"]
-                batch_decisions = result["batch_decisions"]
+                collected_in_batch = result["accepted_comments"]
                 batch_status = result["batch_status"]
                 batch_trace = result["batch_trace"]
                 batch_failed = result["batch_failed"]
+                batch_candidates = result["batch_candidates"]
 
-                final_comments.extend(accepted_in_batch)
-                verification_decisions.extend(batch_decisions)
+                working_comments.extend(collected_in_batch)
+                deferred_candidates.extend(batch_candidates)
                 trace_by_agent[agent].batches.append(batch_trace)
                 trace_by_agent[agent].llm_raw_comment_count += batch_trace.llm_raw_comment_count
                 trace_by_agent[agent].llm_post_review_comment_count += batch_trace.llm_post_review_comment_count
-                trace_by_agent[agent].llm_validated_comment_count += batch_trace.llm_validated_comment_count
-                trace_by_agent[agent].llm_rejected_comment_count += batch_trace.llm_rejected_comment_count
-                trace_by_agent[agent].heuristic_accepted_comment_count += batch_trace.heuristic_accepted_comment_count
 
-                total = len(final_comments)
-                new_count = sum(1 for decision in batch_decisions if decision.accepted)
+                total = len(working_comments)
+                new_count = len(collected_in_batch)
                 if on_agent_done is not None:
                     on_agent_done(agent, new_count, total)
                 if on_agent_batch_status is not None:
@@ -512,7 +560,7 @@ def run_prepared_review(
                     question=question,
                     running_summary=running_summaries.get(agent, ""),
                     batch=batch,
-                    accepted_comments=accepted_in_batch,
+                    accepted_comments=collected_in_batch,
                 )
             continue
 
@@ -523,15 +571,16 @@ def run_prepared_review(
                 running_summary=running_summaries.get(agent, ""),
                 agent=agent,
             )
-            comments_before_batch = len(final_comments)
-            accepted_in_batch = []
+            comments_before_batch = len(working_comments)
+            collected_in_batch: list[AgentComment] = []
+            batch_candidates: list[tuple[str, AgentComment, int | None]] = []
             batch_failed = False
             initial_state = {
                 "question": question,
                 "document_excerpt": excerpt,
                 "running_summary": running_summaries.get(agent, ""),
                 "profile_key": profile_key,
-                "comments": final_comments,
+                "comments": working_comments,
                 "answer": "",
             }
 
@@ -541,32 +590,25 @@ def run_prepared_review(
                 node, payload = next(iter(update.items()))
                 if not isinstance(payload, dict) or node != agent:
                     continue
-                current_comments = payload.get("comments", final_comments)
+                current_comments = payload.get("comments", working_comments)
                 if isinstance(current_comments, list):
                     old_comments = current_comments[:comments_before_batch]
                     batch_comments = current_comments[comments_before_batch:]
-                    verified_comments, batch_decisions = _verify_batch_comments(
+                    batch_candidates = _build_batch_verification_candidates(
                         comments=batch_comments,
                         agent=agent,
                         batch_indexes=batch.indexes,
                         chunks=prepared_document.chunks,
                         refs=prepared_document.refs,
                         reference_pipeline=prepared_document.reference_pipeline,
-                        existing_comments=old_comments,
                         batch_index=batch_idx,
                     )
-                    final_comments = [*old_comments, *verified_comments]
-                    accepted_in_batch = verified_comments
-                    verification_decisions.extend(batch_decisions)
-                else:
-                    batch_decisions = []
+                    collected_in_batch = [candidate[1] for candidate in batch_candidates]
+                    working_comments = [*old_comments, *collected_in_batch]
 
-                batch_status = _format_batch_status(str(payload.get("batch_status", "") or ""), batch_decisions)
+                batch_status = str(payload.get("batch_status", "") or "")
                 llm_raw_comment_count = int(payload.get("llm_raw_comment_count", 0) or 0)
                 llm_post_review_comment_count = int(payload.get("llm_post_review_comment_count", llm_raw_comment_count) or 0)
-                llm_validated_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and decision.accepted)
-                llm_rejected_comment_count = sum(1 for decision in batch_decisions if decision.source == "llm" and not decision.accepted)
-                heuristic_accepted_comment_count = sum(1 for decision in batch_decisions if decision.source == "heuristic" and decision.accepted)
                 trace_by_agent[agent].batches.append(
                     AgentBatchTrace(
                         agent=agent,
@@ -575,19 +617,13 @@ def run_prepared_review(
                         status=batch_status,
                         llm_raw_comment_count=llm_raw_comment_count,
                         llm_post_review_comment_count=llm_post_review_comment_count,
-                        llm_validated_comment_count=llm_validated_comment_count,
-                        llm_rejected_comment_count=llm_rejected_comment_count,
-                        heuristic_accepted_comment_count=heuristic_accepted_comment_count,
-                        visible_comment_count=len(accepted_in_batch),
+                        visible_comment_count=len(collected_in_batch),
                     )
                 )
                 trace_by_agent[agent].llm_raw_comment_count += llm_raw_comment_count
                 trace_by_agent[agent].llm_post_review_comment_count += llm_post_review_comment_count
-                trace_by_agent[agent].llm_validated_comment_count += llm_validated_comment_count
-                trace_by_agent[agent].llm_rejected_comment_count += llm_rejected_comment_count
-                trace_by_agent[agent].heuristic_accepted_comment_count += heuristic_accepted_comment_count
-                total = len(final_comments)
-                new_count = sum(1 for decision in batch_decisions if decision.accepted)
+                total = len(working_comments)
+                new_count = len(collected_in_batch)
                 if on_agent_done is not None:
                     on_agent_done(agent, new_count, total)
                 if on_agent_batch_status is not None:
@@ -601,6 +637,7 @@ def run_prepared_review(
                     batch_failed = True
                     continue
 
+            deferred_candidates.extend(batch_candidates)
             if batch_failed:
                 continue
 
@@ -609,9 +646,18 @@ def run_prepared_review(
                 question=question,
                 running_summary=running_summaries.get(agent, ""),
                 batch=batch,
-                accepted_comments=accepted_in_batch,
+                accepted_comments=collected_in_batch,
             )
 
+    validated_comments, deferred_decisions = _verify_comment_candidates(
+        candidates=deferred_candidates,
+        chunks=prepared_document.chunks,
+        refs=prepared_document.refs,
+        existing_comments=preserved_comments,
+    )
+    verification_decisions = [*preserved_decisions, *deferred_decisions]
+    _recompute_trace_metrics(trace_by_agent, deferred_decisions)
+    final_comments = [*preserved_comments, *validated_comments]
     consolidated_comments = _consolidate_final_comments(final_comments, prepared_document.refs)
 
     if failed_agents:
