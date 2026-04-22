@@ -112,6 +112,15 @@ def _should_refresh_running_summary(batch_idx: int, total_batches: int) -> bool:
     return batch_idx == total_batches or batch_idx % interval == 0
 
 
+def _is_llm_failure_status(status: str) -> bool:
+    folded = _folded_text(status)
+    return (
+        "falha de conexao da llm" in folded
+        or "falha da llm" in folded
+        or "falha de payload da llm" in folded
+    )
+
+
 def _review_comments_with_llm(
     comments,
     agent: str,
@@ -275,7 +284,7 @@ def _execute_agent_batch(
         batch_status = str(payload.get("batch_status", "") or "")
         llm_raw_comment_count = int(payload.get("llm_raw_comment_count", 0) or 0)
         llm_post_review_comment_count = int(payload.get("llm_post_review_comment_count", llm_raw_comment_count) or 0)
-        if "falha de conexao da llm" in _folded_text(batch_status):
+        if _is_llm_failure_status(batch_status):
             batch_failed = True
             break
 
@@ -638,7 +647,7 @@ def run_prepared_review(
                     on_agent_batch_status(agent, batch_idx, len(batches), batch_status)
                 if on_agent_progress is not None:
                     on_agent_progress(agent, batch_idx, len(batches), new_count, total)
-                if "falha de conexao da llm" in _folded_text(batch_status):
+                if _is_llm_failure_status(batch_status):
                     failed_agents.append((agent, batch_status))
                     trace_by_agent[agent].failed = True
                     trace_by_agent[agent].failure_status = batch_status
@@ -676,7 +685,7 @@ def run_prepared_review(
         final_answer = (
             (base_answer or "").rstrip()
             + "\n\n"
-            + f"Avisos de execução: alguns agentes ficaram indisponíveis por falha de conexão da LLM: {failed_summary}."
+            + f"Avisos de execução: alguns agentes ficaram indisponíveis por falha da LLM: {failed_summary}."
         ).strip()
     else:
         final_answer = coordinate_answer(question=question, comments=consolidated_comments)

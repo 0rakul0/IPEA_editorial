@@ -9,6 +9,7 @@ from lxml import etree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import editorial_docx.graph_chat as graph_chat_module
+import editorial_docx.pipeline.orchestrator as orchestrator_module
 import editorial_docx.pipeline.runtime as review_runtime_module
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
@@ -1596,6 +1597,32 @@ def test_run_conversation_returns_partial_result_when_connection_fails(monkeypat
     trace_by_agent = {item.agent: item for item in result.trace.agents}
     assert trace_by_agent["sinopse_abstract"].failed is True
     assert "falha de conexão da LLM" in trace_by_agent["sinopse_abstract"].failure_status
+
+
+def test_run_conversation_returns_partial_result_when_llm_endpoint_is_not_found(monkeypatch):
+    monkeypatch.setattr(orchestrator_module, "get_chat_model", lambda: object())
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_invoke_with_model_fallback",
+        lambda prompt, payload, operation: (_ for _ in ()).throw(RuntimeError("404 page not found")),
+    )
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memória estável")
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
+
+    result = run_conversation(
+        paragraphs=["Texto de teste."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+        sections=[],
+        question="Revise",
+        selected_agents=["gramatica_ortografia"],
+    )
+
+    assert result.comments == []
+    assert "Avisos de execução:" in result.answer
+    assert "falha da LLM por not found/config" in result.answer
+    trace_by_agent = {item.agent: item for item in result.trace.agents}
+    assert trace_by_agent["gramatica_ortografia"].failed is True
+    assert "HTTP 404" in trace_by_agent["gramatica_ortografia"].failure_status
 
 
 def test_run_conversation_continues_with_next_agent_after_connection_failure(monkeypatch):

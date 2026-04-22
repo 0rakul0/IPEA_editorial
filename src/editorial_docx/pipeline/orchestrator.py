@@ -17,6 +17,7 @@ from .coordinator import build_coordinator_excerpt, coordinate_answer
 from .runtime import (
     LLMConnectionFailure,
     _build_batch_review_excerpt,
+    _classify_llm_failure,
     _comment_memory_lines,
     _connection_error_summary,
     _invoke_with_model_fallback,
@@ -41,6 +42,15 @@ class ChatState(TypedDict, total=False):
     batch_status: str
     llm_raw_comment_count: int
     llm_post_review_comment_count: int
+
+
+def _is_llm_failure_status(status: str) -> bool:
+    folded = _folded_text(status)
+    return (
+        "falha de conexao da llm" in folded
+        or "falha da llm" in folded
+        or "falha de payload da llm" in folded
+    )
 
 
 def _agent_node(agent: str):
@@ -82,7 +92,13 @@ def _agent_node(agent: str):
                     "llm_raw_comment_count": 0,
                     "llm_post_review_comment_count": 0,
                 }
-            raise
+            category, detail = _classify_llm_failure(exc)
+            return {
+                "comments": state.get("comments", []),
+                "batch_status": f"falha da LLM por {category}: {detail}",
+                "llm_raw_comment_count": 0,
+                "llm_post_review_comment_count": 0,
+            }
         raw = response.content if isinstance(response.content, str) else str(response.content)
         items, status = _parse_comments_with_status(raw, agent=agent)
         reviewed_items, review_status = _review_comments_with_llm(
@@ -218,7 +234,7 @@ def run_prepared_review(
                     on_agent_batch_status(agent, batch_idx, len(batches), batch_status)
                 if on_agent_progress is not None:
                     on_agent_progress(agent, batch_idx, len(batches), new_count, total)
-                if "falha de conexao da llm" in _folded_text(batch_status):
+                if _is_llm_failure_status(batch_status):
                     failed_agents.append((agent, batch_status))
                     batch_failed = True
                     continue
@@ -247,7 +263,7 @@ def run_prepared_review(
         final_answer = (
             (base_answer or "").rstrip()
             + "\n\n"
-            + f"Avisos de execução: alguns agentes ficaram indisponíveis por falha de conexão da LLM: {failed_summary}."
+            + f"Avisos de execução: alguns agentes ficaram indisponíveis por falha da LLM: {failed_summary}."
         ).strip()
     else:
         _ = build_coordinator_excerpt(

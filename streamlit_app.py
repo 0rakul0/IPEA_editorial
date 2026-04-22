@@ -737,34 +737,41 @@ if st.session_state.pending_run and st.session_state.paragraphs:
         progress_lines.append(f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}{suffix}")
         progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(progress_lines[-14:]))
 
-    with st.spinner("Executando agentes..."):
-        result, logs = _run_review(
-            run["question"],
-            run["agents"],
-            on_progress=_push_progress,
-        )
+    try:
+        with st.spinner("Executando agentes..."):
+            result, logs = _run_review(
+                run["question"],
+                run["agents"],
+                on_progress=_push_progress,
+            )
+    except Exception as exc:
+        progress_header.error("A revisão foi interrompida por uma falha inesperada.")
+        progress_bar.empty()
+        progress_box.empty()
+        st.error(f"Falha ao executar a revisão: {exc}")
+        st.caption("Verifique a configuração da LLM, especialmente provider, base URL e modelo.")
+    else:
+        progress_header.success("Revisão concluída.")
+        progress_bar.progress(100, text="Processamento completo")
+        progress_box.empty()
 
-    progress_header.success("Revisão concluída.")
-    progress_bar.progress(100, text="Processamento completo")
-    progress_box.empty()
+        st.session_state.review_question = run["question"]
+        st.session_state.review_answer = result.answer
+        st.session_state.review_logs = logs
+        st.session_state.review_trace = result.trace
+        st.session_state.review_verification = result.verification
+        st.session_state.comments = _merge_comments(st.session_state.comments, result.comments)
 
-    st.session_state.review_question = run["question"]
-    st.session_state.review_answer = result.answer
-    st.session_state.review_logs = logs
-    st.session_state.review_trace = result.trace
-    st.session_state.review_verification = result.verification
-    st.session_state.comments = _merge_comments(st.session_state.comments, result.comments)
-
-    if len(run["agents"]) == 1:
-        agent = run["agents"][0]
-        st.session_state.agent_result_cache[agent] = {
-            "answer": result.answer,
-            "comments": result.comments,
-            "question": run["question"],
-            "trace": result.trace,
-            "verification": result.verification,
-        }
-    st.rerun()
+        if len(run["agents"]) == 1:
+            agent = run["agents"][0]
+            st.session_state.agent_result_cache[agent] = {
+                "answer": result.answer,
+                "comments": result.comments,
+                "question": run["question"],
+                "trace": result.trace,
+                "verification": result.verification,
+            }
+        st.rerun()
 elif st.session_state.pending_run and not st.session_state.paragraphs:
     st.warning("Carregue um documento antes de executar os agentes.")
     st.session_state.pending_run = None

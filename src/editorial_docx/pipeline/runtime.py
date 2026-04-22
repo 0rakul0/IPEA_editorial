@@ -108,6 +108,43 @@ def _is_quota_or_rate_limit_error(exc: Exception) -> bool:
     return False
 
 
+def _is_not_found_error(exc: Exception) -> bool:
+    not_found_names = {
+        "NotFoundError",
+    }
+    not_found_tokens = {
+        "404",
+        "not found",
+        "page not found",
+        "resource not found",
+        "model_not_found",
+    }
+    for item in _iter_exception_chain(exc):
+        if item.__class__.__name__ in not_found_names:
+            return True
+        msg = str(item).lower()
+        if any(token in msg for token in not_found_tokens):
+            return True
+    return False
+
+
+def _not_found_summary(exc: Exception) -> str:
+    messages: list[str] = []
+    for item in _iter_exception_chain(exc):
+        msg = str(item).strip()
+        if msg:
+            messages.append(msg)
+    for msg in messages:
+        lowered = msg.lower()
+        if "page not found" in lowered or "404" in lowered:
+            return "endpoint/modelo não encontrado (HTTP 404 / `page not found`)"
+        if "model_not_found" in lowered:
+            return "modelo configurado não encontrado no provider"
+    if messages:
+        return messages[-1]
+    return "endpoint ou modelo não encontrado"
+
+
 def _quota_or_rate_limit_summary(exc: Exception) -> str:
     messages: list[str] = []
     for item in _iter_exception_chain(exc):
@@ -130,6 +167,8 @@ def _classify_llm_failure(exc: Exception) -> tuple[str, str]:
         return "connection", _connection_error_summary(exc)
     if _is_quota_or_rate_limit_error(exc):
         return "quota/rate limit", _quota_or_rate_limit_summary(exc)
+    if _is_not_found_error(exc):
+        return "not found/config", _not_found_summary(exc)
     if _is_json_body_error(exc):
         return "json/payload", "falha ao montar ou interpretar o payload/json da LLM"
 
@@ -804,6 +843,7 @@ __all__ = [
     "_invoke_with_retry",
     "_is_connection_error",
     "_is_json_body_error",
+    "_is_not_found_error",
     "_is_quota_or_rate_limit_error",
     "_parse_comment_reviews",
     "_parse_comments",
