@@ -169,6 +169,40 @@ Requisitos:
 - Python 3.10+
 - uma LLM configurada via `.env`
 
+### Instalacao com uv
+
+Se voce quiser rodar o projeto com `uv`, o fluxo recomendado e este:
+
+```bash
+uv sync --dev
+```
+
+Isso cria/sincroniza o ambiente virtual do projeto e instala o proprio pacote em modo de desenvolvimento.
+
+Depois configure o `.env` na raiz, por exemplo:
+
+```bash
+copy .env.example .env
+```
+
+Para executar a CLI com `uv`:
+
+```bash
+uv run editorial-docx "D:\github\lang_IPEA_editorial\input_data\arquivo.docx"
+```
+
+Alternativa equivalente:
+
+```bash
+uv run python -m editorial_docx "D:\github\lang_IPEA_editorial\input_data\arquivo.docx"
+```
+
+Para abrir a interface web:
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
 Instalacao basica no ambiente virtual:
 
 ```bash
@@ -202,6 +236,12 @@ O app:
 
 ```bash
 python -m editorial_docx "D:\github\lang_IPEA_editorial\input_data\arquivo.docx"
+```
+
+Com `uv`, o comando equivalente fica:
+
+```bash
+uv run editorial-docx "D:\github\lang_IPEA_editorial\input_data\arquivo.docx"
 ```
 
 Tambem aceita:
