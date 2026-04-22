@@ -5,6 +5,7 @@ from ..agents.validation import (
     build_validation_context,
     detailed_rejection_reason as _agent_detailed_rejection_reason,
     find_excerpt_index as _find_excerpt_index,
+    has_resolved_text_anchor as _has_resolved_text_anchor,
     keep_rejection_reason as _agent_keep_rejection_reason,
     limit_auto_apply as _limit_auto_apply,
     matches_whole_paragraph as _matches_whole_paragraph,
@@ -42,7 +43,7 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
     if (
         comment.issue_excerpt
         and agent in {"gramatica_ortografia", "referencias"}
-        and _find_excerpt_index(comment.issue_excerpt, [comment.paragraph_index], chunks) is None
+        and not _has_resolved_text_anchor(comment.issue_excerpt, comment.paragraph_index, chunks)
     ):
         return False
     return _agent_keep_rejection_reason(ctx) is None
@@ -57,7 +58,7 @@ def _comment_rejection_reason(comment: AgentComment, agent: str, chunks: list[st
     if (
         comment.issue_excerpt
         and agent in {"gramatica_ortografia", "referencias"}
-        and _find_excerpt_index(comment.issue_excerpt, [comment.paragraph_index], chunks) is None
+        and not _has_resolved_text_anchor(comment.issue_excerpt, comment.paragraph_index, chunks)
     ):
         return "descartado por regra de verificação"
 

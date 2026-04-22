@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from json import JSONDecodeError
+from json import JSONDecodeError, JSONDecoder
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -397,6 +397,89 @@ def _serialize_comments(comments: list[AgentComment]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _strip_json_trailing_commas(text: str) -> str:
+    if not text:
+        return text
+
+    result: list[str] = []
+    in_string = False
+    escape = False
+    string_delimiter = '"'
+    index = 0
+
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == string_delimiter:
+                in_string = False
+            index += 1
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            string_delimiter = char
+            result.append(char)
+            index += 1
+            continue
+
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < len(text) and text[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(text) and text[lookahead] in "}]":
+                index += 1
+                continue
+
+        result.append(char)
+        index += 1
+
+    return "".join(result)
+
+
+def _load_relaxed_json_candidates(content: str) -> list[tuple[object, bool]]:
+    decoder = JSONDecoder()
+    parsed: list[tuple[object, bool]] = []
+    seen_payloads: set[str] = set()
+
+    for relaxed in (False, True):
+        candidate = _strip_json_trailing_commas(content) if relaxed else content
+        if not candidate:
+            continue
+
+        for payload in (candidate.strip(), candidate):
+            if not payload:
+                continue
+            try:
+                data = json.loads(payload)
+            except JSONDecodeError:
+                pass
+            else:
+                key = repr(data)
+                if key not in seen_payloads:
+                    parsed.append((data, relaxed))
+                    seen_payloads.add(key)
+
+        for start_idx, char in enumerate(candidate):
+            if char not in "[{":
+                continue
+            try:
+                data, _ = decoder.raw_decode(candidate[start_idx:])
+            except JSONDecodeError:
+                continue
+            key = repr(data)
+            if key in seen_payloads:
+                continue
+            parsed.append((data, relaxed))
+            seen_payloads.add(key)
+
+    return parsed
+
+
 def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment], str]:
     content = (raw or "").strip()
     if not content:
@@ -542,6 +625,142 @@ def _parse_comment_reviews(raw: str) -> tuple[list[dict[str, object]], str]:
             return reviews, status
 
     return [], "sem revisões válidas"
+
+
+def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment], str]:
+    content = (raw or "").strip()
+    if not content:
+        return [], "sem conteudo"
+
+    candidates: list[tuple[str, bool]] = [(content, False)]
+    fenced_match = re.search(r"```(?:json)?\s*(.*?)```", content, flags=re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        candidates.append((fenced_match.group(1).strip(), True))
+
+    key_match = re.search(r'"comments"\s*:\s*(\[[\s\S]*\])', content, flags=re.IGNORECASE)
+    if key_match:
+        candidates.append((key_match.group(1).strip(), True))
+
+    statuses: list[str] = []
+    for idx, (candidate, recovered_candidate) in enumerate(candidates):
+        if not candidate:
+            continue
+        json_candidates = _load_relaxed_json_candidates(candidate)
+        if not json_candidates:
+            statuses.append("falha json")
+            continue
+
+        for data, relaxed_parse in json_candidates:
+            if isinstance(data, dict):
+                maybe_comments = data.get("comments")
+                if isinstance(maybe_comments, list):
+                    data = maybe_comments
+                else:
+                    statuses.append("json sem comments")
+                    continue
+
+            if not isinstance(data, list):
+                statuses.append("json nao e lista")
+                continue
+
+            comments: list[AgentComment] = []
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                category = str(entry.get("category") or "").strip() or agent
+                message = str(entry.get("message") or "").strip()
+                paragraph_index = entry.get("paragraph_index")
+                if isinstance(paragraph_index, bool):
+                    paragraph_index = int(paragraph_index)
+                elif isinstance(paragraph_index, (int, float)):
+                    paragraph_index = int(paragraph_index)
+                else:
+                    paragraph_index = None
+                auto_apply = bool(entry.get("auto_apply")) if agent in {"estrutura", "tabelas_figuras", "referencias"} else False
+                format_spec = str(entry.get("format_spec") or "").strip() if auto_apply or agent == "tipografia" else str(entry.get("format_spec") or "").strip()
+                comments.append(
+                    AgentComment(
+                        agent=agent,
+                        category=category,
+                        message=message,
+                        paragraph_index=paragraph_index,
+                        issue_excerpt=str(entry.get("issue_excerpt") or "").strip(),
+                        suggested_fix=str(entry.get("suggested_fix") or "").strip(),
+                        auto_apply=auto_apply,
+                        format_spec=format_spec,
+                    )
+                )
+            if comments:
+                status = "json direto"
+                if idx > 0 or recovered_candidate or relaxed_parse:
+                    status = "json recuperado"
+                return comments, status
+
+    return [], "sem comentarios validos"
+
+
+def _parse_comment_reviews(raw: str) -> tuple[list[dict[str, object]], str]:
+    content = (raw or "").strip()
+    if not content:
+        return [], "sem conteudo"
+
+    candidates: list[tuple[str, bool]] = [(content, False)]
+    fenced_match = re.search(r"```(?:json)?\s*(.*?)```", content, flags=re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        candidates.append((fenced_match.group(1).strip(), True))
+
+    key_match = re.search(r'"reviews"\s*:\s*(\[[\s\S]*\])', content, flags=re.IGNORECASE)
+    if key_match:
+        candidates.append((key_match.group(1).strip(), True))
+
+    for idx, (candidate, recovered_candidate) in enumerate(candidates):
+        if not candidate:
+            continue
+        json_candidates = _load_relaxed_json_candidates(candidate)
+        if not json_candidates:
+            continue
+
+        for data, relaxed_parse in json_candidates:
+            if isinstance(data, dict):
+                maybe_reviews = data.get("reviews")
+                if isinstance(maybe_reviews, list):
+                    data = maybe_reviews
+                else:
+                    continue
+
+            if not isinstance(data, list):
+                continue
+
+            reviews: list[dict[str, object]] = []
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                decision = str(entry.get("decision") or "").strip().lower()
+                if decision not in {"approve", "reject"}:
+                    continue
+                paragraph_index = entry.get("paragraph_index")
+                if isinstance(paragraph_index, bool):
+                    paragraph_index = int(paragraph_index)
+                elif isinstance(paragraph_index, (int, float)):
+                    paragraph_index = int(paragraph_index)
+                else:
+                    paragraph_index = None
+                reviews.append(
+                    {
+                        "paragraph_index": paragraph_index,
+                        "issue_excerpt": str(entry.get("issue_excerpt") or "").strip(),
+                        "suggested_fix": str(entry.get("suggested_fix") or "").strip(),
+                        "decision": decision,
+                        "reason": str(entry.get("reason") or "").strip(),
+                    }
+                )
+            if reviews:
+                status = "json direto"
+                if idx > 0 or recovered_candidate or relaxed_parse:
+                    status = "json recuperado"
+                return reviews, status
+
+    return [], "sem revisoes validas"
 
 
 def build_coordinator_answer(question: str, comments: list[AgentComment]) -> str:

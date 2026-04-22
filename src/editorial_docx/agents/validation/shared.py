@@ -70,6 +70,16 @@ def find_excerpt_index(excerpt: str, candidate_indexes: list[int], chunks: list[
     return None
 
 
+def has_resolved_text_anchor(excerpt: str, paragraph_index: int | None, chunks: list[str]) -> bool:
+    if not isinstance(paragraph_index, int) or not (0 <= paragraph_index < len(chunks)):
+        return False
+    if not (excerpt or "").strip():
+        return True
+    if find_excerpt_index(excerpt, [paragraph_index], chunks) is not None:
+        return True
+    return bool((chunks[paragraph_index] or "").strip())
+
+
 def semantic_comment_key(item: AgentComment) -> tuple[str, int | None, str, str]:
     return (
         item.agent,

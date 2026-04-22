@@ -12,6 +12,7 @@ import editorial_docx.graph_chat as graph_chat_module
 import editorial_docx.pipeline.runtime as review_runtime_module
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
+from editorial_docx.agents.validation.shared import has_resolved_text_anchor
 from editorial_docx.document_loader import Section
 from editorial_docx.graph_chat import (
     _agent_scope_indexes,
@@ -78,6 +79,30 @@ def test_parse_comments_accepts_wrapped_comments_key():
     assert len(comments) == 1
     assert comments[0].message == "Ajustar concordância"
     assert comments[0].paragraph_index == 2
+
+
+def test_parse_comments_recovers_json_with_prose_and_trailing_commas():
+    raw = """
+    Seguem os achados:
+    [
+      {
+        "category": "gramatica_ortografia",
+        "message": "Ajustar concordancia verbal.",
+        "paragraph_index": 2,
+        "issue_excerpt": "os dados indicam",
+        "suggested_fix": "os dados indicam com clareza",
+      },
+    ]
+    """
+
+    comments = _parse_comments(raw, agent="gramatica_ortografia")
+
+    assert len(comments) == 1
+    assert comments[0].paragraph_index == 2
+
+
+def test_agent_order_includes_estrutura():
+    assert "estrutura" in AGENT_ORDER
 
 
 def test_parse_comments_returns_empty_list_for_empty_payload():
@@ -315,6 +340,16 @@ def test_normalize_batch_comments_maps_local_index_to_global_index():
     assert normalized[0].paragraph_index == 5
 
 
+def test_has_resolved_text_anchor_accepts_valid_paragraph_even_with_paraphrased_excerpt():
+    chunks = ["O estudo mostra que a política ampliou o acesso à renda."]
+
+    assert has_resolved_text_anchor(
+        excerpt="a política aumentou a cobertura de renda",
+        paragraph_index=0,
+        chunks=chunks,
+    )
+
+
 def test_normalize_batch_comments_discards_grammar_comment_on_direct_quote():
     comments = [
         AgentComment(
@@ -494,7 +529,7 @@ def test_normalize_batch_comments_discards_grammar_comment_that_only_removes_ter
 
 def test_agent_order_excludes_metadata_and_structure_from_default_run():
     assert "metadados" not in AGENT_ORDER
-    assert "estrutura" not in AGENT_ORDER
+    assert "estrutura" in AGENT_ORDER
 
 
 def test_agent_short_labels_are_compact_and_self_explanatory():
@@ -2783,7 +2818,7 @@ def test_agent_order_excludes_conformidade_estilos():
     assert "conformidade_estilos" not in AGENT_ORDER
     assert "metadados" not in AGENT_ORDER
     assert "sinopse_abstract" in AGENT_ORDER
-    assert "estrutura" not in AGENT_ORDER
+    assert "estrutura" in AGENT_ORDER
 
 
 def test_normalize_batch_comments_discards_structure_section_claim_for_illustration_caption():

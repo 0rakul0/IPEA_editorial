@@ -33,6 +33,7 @@ AGENT_ORDER = [
     "sinopse_abstract",
     "gramatica_ortografia",
     "tabelas_figuras",
+    "estrutura",
     "comentarios_usuario_referencias",
     "referencias",
     "tipografia",

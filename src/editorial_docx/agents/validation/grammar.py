@@ -12,7 +12,7 @@ from ...review_patterns import (
     _removes_diacritic_only_word,
     _removes_terminal_period_only,
 )
-from .shared import ValidationContext, find_excerpt_index
+from .shared import ValidationContext, has_resolved_text_anchor
 
 
 def keep_rejection_reason(ctx: ValidationContext) -> str | None:
@@ -52,7 +52,7 @@ def keep_rejection_reason(ctx: ValidationContext) -> str | None:
         return "descartado por regra de verificação"
     if _removes_terminal_period_only(comment.issue_excerpt or source_text, comment.suggested_fix):
         return "descartado por regra de verificação"
-    if comment.issue_excerpt and find_excerpt_index(comment.issue_excerpt, [comment.paragraph_index], ctx.chunks) is None:
+    if comment.issue_excerpt and not has_resolved_text_anchor(comment.issue_excerpt, comment.paragraph_index, ctx.chunks):
         return "descartado por regra de verificação"
     return None
 
