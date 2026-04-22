@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from .agents.user_reference_agent import USER_REFERENCE_AGENT
+from .config import DEFAULT_REVIEW_SUMMARY_UPDATE_INTERVAL
 from .llm import get_chat_model, get_chat_models, get_llm_retry_config
 from .models import (
     AgentBatchTrace,
@@ -104,6 +105,11 @@ def _invoke_with_model_fallback(prompt, payload: dict[str, str], operation: str)
 _REVIEWER_ENABLED_AGENTS = {"sinopse_abstract"}
 _build_graph = _default_build_graph
 _PARALLEL_BATCH_AGENTS: set[str] = set()
+
+
+def _should_refresh_running_summary(batch_idx: int, total_batches: int) -> bool:
+    interval = max(1, DEFAULT_REVIEW_SUMMARY_UPDATE_INTERVAL)
+    return batch_idx == total_batches or batch_idx % interval == 0
 
 
 def _review_comments_with_llm(
@@ -555,12 +561,14 @@ def run_prepared_review(
                     trace_by_agent[agent].failure_status = batch_status
                     continue
 
+                should_refresh_summary = _should_refresh_running_summary(batch_idx, len(batches))
                 running_summaries[agent] = _update_running_summary(
                     agent=agent,
                     question=question,
                     running_summary=running_summaries.get(agent, ""),
                     batch=batch,
                     accepted_comments=collected_in_batch,
+                    use_llm=should_refresh_summary,
                 )
             continue
 
@@ -641,12 +649,14 @@ def run_prepared_review(
             if batch_failed:
                 continue
 
+            should_refresh_summary = _should_refresh_running_summary(batch_idx, len(batches))
             running_summaries[agent] = _update_running_summary(
                 agent=agent,
                 question=question,
                 running_summary=running_summaries.get(agent, ""),
                 batch=batch,
                 accepted_comments=collected_in_batch,
+                use_llm=should_refresh_summary,
             )
 
     validated_comments, deferred_decisions = _verify_comment_candidates(

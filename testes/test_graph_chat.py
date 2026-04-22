@@ -1792,6 +1792,85 @@ def test_run_conversation_processes_grammar_batches_sequentially_by_default(monk
     assert trace.llm_raw_comment_count == 1
 
 
+def test_run_conversation_throttles_running_summary_llm_updates(monkeypatch):
+    summary_calls = []
+    state = {"batch_idx": 0}
+
+    class FakeAgentApp:
+        def stream(self, initial_state, stream_mode="updates"):
+            batch_idx = state["batch_idx"]
+            state["batch_idx"] += 1
+            yield {
+                "tabelas_figuras": {
+                    "comments": [
+                        *initial_state["comments"],
+                        AgentComment(
+                            agent="tabelas_figuras",
+                            category="Legenda",
+                            message=f"Ajustar legenda do lote {batch_idx}.",
+                            paragraph_index=batch_idx,
+                            issue_excerpt=f"Tabela {batch_idx}",
+                            suggested_fix=f"Tabela {batch_idx} ajustada",
+                        ),
+                    ],
+                    "batch_status": "ok",
+                    "llm_raw_comment_count": 1,
+                    "llm_post_review_comment_count": 1,
+                }
+            }
+
+    def fake_update_running_summary(**kwargs):
+        summary_calls.append(
+            {
+                "batch_range": (kwargs["batch"].start_idx, kwargs["batch"].end_idx),
+                "use_llm": kwargs["use_llm"],
+            }
+        )
+        return "memória estável"
+
+    monkeypatch.setattr(graph_chat_module, "_build_graph", lambda agent_order, include_coordinator=False: FakeAgentApp())
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", fake_update_running_summary)
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
+
+    long_prefix = "Texto analítico com contexto suficiente para revisão detalhada. " * 120
+    result = run_conversation(
+        paragraphs=[
+            long_prefix + "Tabela 0.",
+            long_prefix + "Tabela 1.",
+            long_prefix + "Tabela 2.",
+            long_prefix + "Tabela 3.",
+            long_prefix + "Tabela 4.",
+            long_prefix + "Tabela 5.",
+            long_prefix + "Tabela 6.",
+            long_prefix + "Tabela 7.",
+            long_prefix + "Tabela 8.",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=caption",
+            "parágrafo 2 | tipo=caption",
+            "parágrafo 3 | tipo=caption",
+            "parágrafo 4 | tipo=caption",
+            "parágrafo 5 | tipo=caption",
+            "parágrafo 6 | tipo=caption",
+            "parágrafo 7 | tipo=caption",
+            "parágrafo 8 | tipo=caption",
+            "parágrafo 9 | tipo=caption",
+        ],
+        sections=[],
+        question="Revise",
+        selected_agents=["tabelas_figuras"],
+    )
+
+    assert len(result.trace.agents) == 1
+    batch_count = len(result.trace.agents[0].batches)
+    expected_use_llm = [
+        (idx % graph_chat_module.DEFAULT_REVIEW_SUMMARY_UPDATE_INTERVAL == 0) or (idx == batch_count)
+        for idx in range(1, batch_count + 1)
+    ]
+    assert len(summary_calls) == batch_count
+    assert [item["use_llm"] for item in summary_calls] == expected_use_llm
+
+
 def test_normalize_batch_comments_discards_table_source_suggestion_inside_caption():
     comments = [
         AgentComment(
