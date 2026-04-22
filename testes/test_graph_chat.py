@@ -539,6 +539,63 @@ def test_agent_short_labels_are_compact_and_self_explanatory():
     assert agent_short_label("referencias") == "ref"
 
 
+def test_agent_scope_indexes_skips_sinopse_abstract_when_document_has_no_summary_markers():
+    chunks = [
+        "Título do documento",
+        "Introdução",
+        "Este documento apresenta os resultados da RAIS.",
+        "Palavras-chave: mercado de trabalho; RAIS.",
+        "JEL: J21.",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=title",
+        "parágrafo 2 | tipo=heading",
+        "parágrafo 3 | tipo=paragraph",
+        "parágrafo 4 | tipo=keywords_label",
+        "parágrafo 5 | tipo=jel_code",
+    ]
+
+    indexes = _agent_scope_indexes("sinopse_abstract", chunks, refs, sections=[])
+
+    assert indexes == []
+
+
+def test_agent_scope_indexes_skips_sinopse_abstract_without_summary_title_even_if_keywords_exist():
+    chunks = [
+        "Introdução",
+        "Este documento apresenta os resultados da RAIS.",
+        "Palavras-chave: mercado de trabalho; RAIS.",
+        "JEL: J21.",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=heading",
+        "parágrafo 2 | tipo=paragraph",
+        "parágrafo 3 | tipo=keywords_label",
+        "parágrafo 4 | tipo=jel_code",
+    ]
+
+    indexes = _agent_scope_indexes("sinopse_abstract", chunks, refs, sections=[])
+
+    assert indexes == []
+
+
+def test_agent_scope_indexes_includes_sinopse_abstract_with_explicit_summary_title():
+    chunks = [
+        "RESUMO",
+        "Este estudo analisa a dinâmica do emprego formal.",
+        "Palavras-chave: emprego; RAIS.",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=heading",
+        "parágrafo 2 | tipo=paragraph",
+        "parágrafo 3 | tipo=keywords_label",
+    ]
+
+    indexes = _agent_scope_indexes("sinopse_abstract", chunks, refs, sections=[])
+
+    assert indexes == [0, 1, 2]
+
+
 def test_normalize_batch_comments_discards_grammar_comment_that_only_swaps_demonstrative():
     comments = [
         AgentComment(

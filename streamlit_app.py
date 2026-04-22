@@ -51,14 +51,14 @@ with st.sidebar:
     if env_path.exists():
         st.caption("Arquivo .env detectado no repositório. Usando configuração local.")
     else:
-        key_env = "OPENAI_API_KEY" if llm_config["provider"] == "openai" else "LLM_API_KEY"
+        key_env = "LLM_API_KEY"
         key_source = "variável de ambiente" if llm_config.get("api_key") else "não configurada"
         st.caption(f"Chave atual: {key_source}")
         if llm_config["provider"] != "ollama":
             api_key_input = st.text_input(
                 key_env,
                 type="password",
-                help="A chave fica somente nesta sessão e não é salva em disco.",
+                help="A chave fica somente nesta sessão e não é salva em disco. OPENAI_API_KEY continua aceito como alias legado.",
             )
             if st.button("Usar chave nesta sessão", use_container_width=True):
                 if api_key_input.strip():
@@ -274,23 +274,6 @@ def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
     return export_comments
 
 
-def _list_data_files(*suffixes: str) -> list[Path]:
-    if not INPUT_DATA_DIR.exists():
-        return []
-    normalized_suffixes = {suffix.lower() for suffix in suffixes}
-    return sorted(
-        [path for path in INPUT_DATA_DIR.iterdir() if path.is_file() and path.suffix.lower() in normalized_suffixes],
-        key=lambda item: item.name.lower(),
-    )
-
-
-def _persist_loaded_normalized(loaded, source_path: Path) -> Path:
-    output_paths = build_output_paths(source_path, llm_model_tag)
-    normalized_output_path = output_paths["normalized_json"]
-    normalized_output_path.write_text(loaded.normalized_document.to_json(), encoding="utf-8")
-    return normalized_output_path
-
-
 def _serialize_trace(trace: ExecutionTrace | None) -> dict[str, object]:
     if trace is None:
         return {"agents": []}
@@ -391,15 +374,8 @@ def _build_diagnostic_summary_text(answer: str, comments: list[AgentComment]) ->
     return headline + "\n\n" + clean_answer
 
 
-def _persist_review_outputs(report_rows: list[dict], export_comments: list[AgentComment]) -> tuple[Path, Path, Path | None, bytes | None]:
-    source_for_outputs = st.session_state.doc_path or st.session_state.normalized_json_path or (INPUT_DATA_DIR / st.session_state.source_name)
-    output_paths = build_output_paths(Path(source_for_outputs), llm_model_tag)
-
-    report_json_path = output_paths["report_json"]
-    diagnostics_json_path = output_paths["diagnostics_json"]
-    report_json_path.write_text(json.dumps(report_rows, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    diagnostics_payload = {
+def _build_diagnostics_payload(export_comments: list[AgentComment]) -> dict[str, object]:
+    return {
         "source_name": st.session_state.source_name,
         "question": st.session_state.review_question,
         "answer": st.session_state.review_answer,
@@ -411,7 +387,15 @@ def _persist_review_outputs(report_rows: list[dict], export_comments: list[Agent
         "trace": _serialize_trace(st.session_state.review_trace),
         "progress_logs": st.session_state.review_logs,
     }
-    diagnostics_json_path.write_text(json.dumps(diagnostics_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _persist_review_outputs(report_rows: list[dict], export_comments: list[AgentComment]) -> tuple[Path, str, Path | None, bytes | None]:
+    source_for_outputs = st.session_state.doc_path or st.session_state.normalized_json_path or (INPUT_DATA_DIR / st.session_state.source_name)
+    output_paths = build_output_paths(Path(source_for_outputs), llm_model_tag)
+
+    report_json_path = output_paths["report_json"]
+    report_json_text = json.dumps(report_rows, ensure_ascii=False, indent=2)
+    report_json_path.write_text(report_json_text, encoding="utf-8")
 
     docx_path: Path | None = None
     docx_bytes: bytes | None = None
@@ -424,9 +408,9 @@ def _persist_review_outputs(report_rows: list[dict], export_comments: list[Agent
         docx_path.write_bytes(docx_bytes)
 
     st.session_state.report_json_path = report_json_path
-    st.session_state.diagnostics_json_path = diagnostics_json_path
+    st.session_state.diagnostics_json_path = None
     st.session_state.commented_docx_path = docx_path
-    return report_json_path, diagnostics_json_path, docx_path, docx_bytes
+    return report_json_path, report_json_text, docx_path, docx_bytes
 
 
 def _set_status_value(key: str, value: str) -> None:
@@ -655,7 +639,9 @@ def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: 
     st.session_state.user_comments = loaded.user_comments
     st.session_state.doc_kind = loaded.kind
     st.session_state.normalized_json_text = loaded.normalized_document.to_json()
-    st.session_state.normalized_json_path = loaded.source_path
+    st.session_state.normalized_json_path = (
+        loaded.source_path if loaded.source_path.suffix.lower() == ".json" else None
+    )
     st.session_state.source_name = (doc_path or loaded.source_path).stem
     st.session_state.report_json_path = None
     st.session_state.diagnostics_json_path = None
@@ -667,21 +653,8 @@ def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: 
     st.session_state.review_verification = None
 
 
-available_documents = _list_data_files(".docx", ".pdf")
-available_normalized = _list_data_files(".json")
-
-selected_document_name = st.selectbox(
-    "Arquivos em input_data (.docx ou .pdf)",
-    options=[""] + [path.name for path in available_documents],
-    index=0,
-)
-selected_normalized_name = st.selectbox(
-    "Normalized em input_data (.json)",
-    options=[""] + [path.name for path in available_normalized],
-    index=0,
-)
-uploaded = st.file_uploader("Adicionar documento ao input_data (.docx ou .pdf)", type=["docx", "pdf"])
-uploaded_normalized = st.file_uploader("Adicionar normalized_document.json ao input_data", type=["json"])
+uploaded = st.file_uploader("Carregar documento (.docx ou .pdf)", type=["docx", "pdf"])
+uploaded_normalized = st.file_uploader("Carregar normalized_document.json", type=["json"])
 
 if uploaded is not None:
     file_bytes = uploaded.getvalue()
@@ -694,9 +667,7 @@ if uploaded is not None:
         doc_path.write_bytes(file_bytes)
 
         loaded = load_document(doc_path)
-        normalized_path = _persist_loaded_normalized(loaded, doc_path)
         _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=file_bytes, doc_path=doc_path)
-        st.session_state.normalized_json_path = normalized_path
 
 elif uploaded_normalized is not None:
     file_bytes = uploaded_normalized.getvalue()
@@ -708,32 +679,17 @@ elif uploaded_normalized is not None:
         st.session_state.doc_profile = "GENERIC"
         _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
         st.session_state.normalized_json_path = normalized_path
-elif selected_document_name:
-    doc_path = INPUT_DATA_DIR / selected_document_name
-    file_bytes = doc_path.read_bytes()
-    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
-    profile = detect_prompt_profile(doc_path.name)
-    st.session_state.doc_profile = profile.key
-    if st.session_state.doc_fingerprint != file_fingerprint:
-        loaded = load_document(doc_path)
-        normalized_path = _persist_loaded_normalized(loaded, doc_path)
-        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=file_bytes, doc_path=doc_path)
-        st.session_state.normalized_json_path = normalized_path
-elif selected_normalized_name:
-    normalized_path = INPUT_DATA_DIR / selected_normalized_name
-    file_bytes = normalized_path.read_bytes()
-    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
-    if st.session_state.doc_fingerprint != file_fingerprint:
-        loaded = load_normalized_document(normalized_path)
-        st.session_state.doc_profile = "GENERIC"
-        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
-        st.session_state.normalized_json_path = normalized_path
 
 col_diag, col_comments = st.columns([1.05, 1.35], gap="large")
 
 if st.session_state.normalized_json_text:
     normalized_payload = json.loads(st.session_state.normalized_json_text)
     metadata = normalized_payload.get("metadata") or {}
+    normalized_download_name = (
+        Path(st.session_state.normalized_json_path).name
+        if st.session_state.normalized_json_path is not None
+        else f"{st.session_state.source_name or 'documento'}_normalized_document.json"
+    )
     with st.expander("Normalized Document", expanded=False):
         meta_a, meta_b, meta_c, meta_d = st.columns(4)
         meta_a.metric("Blocos", len(normalized_payload.get("blocks") or []))
@@ -745,13 +701,13 @@ if st.session_state.normalized_json_text:
             f"gerado em: `{metadata.get('generated_at', '')}`"
         )
         if st.session_state.normalized_json_path:
-            st.caption(f"Artefato atual: `{st.session_state.normalized_json_path}`")
+            st.caption(f"JSON carregado: `{st.session_state.normalized_json_path}`")
+        else:
+            st.caption("O normalized está em memória e só vira arquivo se você solicitar explicitamente.")
         st.download_button(
             label="Baixar normalized_document.json",
             data=st.session_state.normalized_json_text,
-            file_name=(
-                f"{Path(st.session_state.normalized_json_path).stem if st.session_state.normalized_json_path else 'normalized_document'}.json"
-            ),
+            file_name=normalized_download_name,
             mime="application/json",
         )
         st.json(
@@ -815,7 +771,9 @@ elif st.session_state.pending_run and not st.session_state.paragraphs:
 
 rows = _build_rows()
 report_json_path = None
-diagnostics_json_path = None
+report_json_text = None
+diagnostics_json_name = None
+diagnostics_json_text = None
 docx_path = None
 docx_bytes = None
 
@@ -823,11 +781,15 @@ if rows:
     _ensure_correction_state(rows)
     report = _build_correction_report(rows)
     export_comments = _build_export_comments(report)
-    report_json_path, diagnostics_json_path, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
+    report_json_path, report_json_text, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
+    diagnostics_json_name = f"{report_json_path.stem}.diagnostics.json"
+    diagnostics_json_text = json.dumps(_build_diagnostics_payload(export_comments), ensure_ascii=False, indent=2)
 elif st.session_state.comments:
     report = _build_correction_report(_build_rows())
     export_comments = st.session_state.comments
-    report_json_path, diagnostics_json_path, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
+    report_json_path, report_json_text, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
+    diagnostics_json_name = f"{report_json_path.stem}.diagnostics.json"
+    diagnostics_json_text = json.dumps(_build_diagnostics_payload(export_comments), ensure_ascii=False, indent=2)
 
 with col_diag:
     st.subheader("Diagnóstico")
@@ -854,10 +816,9 @@ with col_diag:
 
         st.markdown(_build_diagnostic_summary_text(st.session_state.review_answer, st.session_state.comments))
 
-        if report_json_path and diagnostics_json_path:
+        if report_json_path:
             st.markdown(
-                "O relatório completo está em "
-                f"`{report_json_path}` e o rastreio da execução em `{diagnostics_json_path}`."
+                f"O relatório completo foi salvo em `{report_json_path}`."
             )
 
         if st.session_state.review_question:
@@ -875,17 +836,17 @@ with col_diag:
         if report_json_path:
             st.download_button(
                 label="Baixar relatório JSON",
-                data=Path(report_json_path).read_text(encoding="utf-8"),
+                data=report_json_text or Path(report_json_path).read_text(encoding="utf-8"),
                 file_name=Path(report_json_path).name,
                 mime="application/json",
                 use_container_width=True,
             )
 
-        if diagnostics_json_path:
+        if diagnostics_json_text and diagnostics_json_name:
             st.download_button(
                 label="Baixar diagnostics JSON",
-                data=Path(diagnostics_json_path).read_text(encoding="utf-8"),
-                file_name=Path(diagnostics_json_path).name,
+                data=diagnostics_json_text,
+                file_name=diagnostics_json_name,
                 mime="application/json",
                 use_container_width=True,
             )

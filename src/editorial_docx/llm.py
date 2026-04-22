@@ -26,30 +26,57 @@ def _load_env() -> None:
     else:
         load_dotenv()
 
+
+def _read_env(*keys: str, default: str = "") -> str:
+    for key in keys:
+        value = os.getenv(key)
+        if value is not None and value.strip():
+            return value.strip()
+    return default
+
+
+def _has_env(*keys: str) -> bool:
+    return any(bool(os.getenv(key, "").strip()) for key in keys)
+
+
+def _infer_provider() -> str:
+    explicit_provider = _read_env("LLM_PROVIDER").lower()
+    if explicit_provider:
+        return explicit_provider
+
+    if _has_env("OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_API_KEY"):
+        return "ollama"
+    if _has_env("LLM_BASE_URL"):
+        return "openai_compatible"
+    if _has_env("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"):
+        return "openai"
+    return "openai"
+
+
 def _build_provider_config(provider: str) -> dict[str, str]:
     provider = (provider or "").strip().lower()
 
     if provider == "ollama":
         return {
             "provider": "ollama",
-            "model": (os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL") or DEFAULT_OLLAMA_MODEL).strip(),
-            "base_url": (os.getenv("OLLAMA_BASE_URL") or os.getenv("LLM_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).strip(),
-            "api_key": (os.getenv("OLLAMA_API_KEY") or os.getenv("LLM_API_KEY") or DEFAULT_OLLAMA_API_KEY).strip(),
+            "model": _read_env("LLM_MODEL", "OLLAMA_MODEL", default=DEFAULT_OLLAMA_MODEL),
+            "base_url": _read_env("LLM_BASE_URL", "OLLAMA_BASE_URL", default=DEFAULT_OLLAMA_BASE_URL),
+            "api_key": _read_env("LLM_API_KEY", "OLLAMA_API_KEY", default=DEFAULT_OLLAMA_API_KEY),
         }
 
     if provider == "openai_compatible":
         return {
             "provider": "openai_compatible",
-            "model": (os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL).strip(),
-            "base_url": (os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "").strip(),
-            "api_key": os.getenv("LLM_API_KEY", "").strip(),
+            "model": _read_env("LLM_MODEL", "OPENAI_MODEL", default=DEFAULT_OPENAI_MODEL),
+            "base_url": _read_env("LLM_BASE_URL", "OPENAI_BASE_URL"),
+            "api_key": _read_env("LLM_API_KEY", "OPENAI_API_KEY"),
         }
 
     return {
         "provider": "openai",
-        "model": (os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL).strip(),
-        "base_url": (os.getenv("OPENAI_BASE_URL") or "").strip(),
-        "api_key": (os.getenv("OPENAI_API_KEY") or "").strip(),
+        "model": _read_env("LLM_MODEL", "OPENAI_MODEL", default=DEFAULT_OPENAI_MODEL),
+        "base_url": _read_env("LLM_BASE_URL", "OPENAI_BASE_URL"),
+        "api_key": _read_env("LLM_API_KEY", "OPENAI_API_KEY"),
     }
 
 
@@ -67,14 +94,16 @@ def _is_config_usable(config: dict[str, str]) -> bool:
 def get_llm_candidate_configs() -> list[dict[str, str]]:
     _load_env()
 
-    explicit_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-    inferred_provider = "ollama" if os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL") else "openai"
-    fallback_provider = explicit_provider or inferred_provider
+    preferred_provider = _infer_provider()
 
     candidates: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
 
-    for provider in ("openai", fallback_provider):
+    provider_order = [preferred_provider]
+    if preferred_provider != "openai":
+        provider_order.append("openai")
+
+    for provider in provider_order:
         config = _build_provider_config(provider)
         key = (config["provider"], config["model"], config["base_url"])
         if key in seen or not _is_config_usable(config):

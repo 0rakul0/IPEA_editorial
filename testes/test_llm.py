@@ -21,7 +21,7 @@ def _clear_llm_env(monkeypatch):
 
 def test_get_llm_config_defaults_to_openai(monkeypatch):
     _clear_llm_env(monkeypatch)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
 
     config = get_llm_config()
 
@@ -33,8 +33,8 @@ def test_get_llm_config_defaults_to_openai(monkeypatch):
 def test_get_llm_config_uses_ollama_settings(monkeypatch):
     _clear_llm_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1:8b")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "llama3.1:8b")
 
     config = get_llm_config()
 
@@ -58,7 +58,7 @@ def test_get_llm_config_uses_openai_compatible_settings(monkeypatch):
     assert config["api_key"] == ""
 
 
-def test_get_llm_candidate_configs_prefers_openai_before_fallback_provider(monkeypatch):
+def test_get_llm_candidate_configs_prefers_explicit_provider_before_openai(monkeypatch):
     _clear_llm_env(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-5.2")
@@ -68,8 +68,8 @@ def test_get_llm_candidate_configs_prefers_openai_before_fallback_provider(monke
 
     configs = get_llm_candidate_configs()
 
-    assert [cfg["provider"] for cfg in configs] == ["openai", "openai_compatible"]
-    assert configs[0]["model"] == "gpt-5.2"
+    assert [cfg["provider"] for cfg in configs] == ["openai_compatible", "openai"]
+    assert configs[0]["model"] == "modelo-interno"
     assert configs[1]["model"] == "modelo-interno"
 
 
@@ -83,6 +83,48 @@ def test_get_llm_candidate_configs_uses_fallback_when_openai_is_unavailable(monk
 
     assert len(configs) == 1
     assert configs[0]["provider"] == "openai_compatible"
+
+
+def test_get_llm_config_prefers_generic_model_over_provider_specific_alias(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.2")
+
+    config = get_llm_config()
+
+    assert config["provider"] == "openai"
+    assert config["model"] == "gpt-4.1-mini"
+
+
+def test_get_llm_config_prefers_generic_ollama_settings_over_legacy_aliases(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_MODEL", "qwen3:14b")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_API_KEY", "token-generico")
+    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1:8b")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://legacy:11434/v1")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama")
+
+    config = get_llm_config()
+
+    assert config["provider"] == "ollama"
+    assert config["model"] == "qwen3:14b"
+    assert config["base_url"] == "http://localhost:11434/v1"
+    assert config["api_key"] == "token-generico"
+
+
+def test_get_llm_config_infers_openai_compatible_from_generic_base_url(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_BASE_URL", "http://interna/v1")
+    monkeypatch.setenv("LLM_MODEL", "modelo-interno")
+
+    config = get_llm_config()
+
+    assert config["provider"] == "openai_compatible"
+    assert config["base_url"] == "http://interna/v1"
+    assert config["model"] == "modelo-interno"
 
 
 def test_get_llm_model_tag_normalizes_openai_model_name():

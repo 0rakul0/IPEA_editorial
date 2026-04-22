@@ -73,6 +73,12 @@ def _write_history_snapshot(main_path: Path, content: str | bytes) -> Path:
     return history_path
 
 
+def _maybe_write_history_snapshot(enabled: bool, main_path: Path, content: str | bytes) -> Path | None:
+    if not enabled:
+        return None
+    return _write_history_snapshot(main_path, content)
+
+
 def main() -> int:
     ensure_runtime_directories()
 
@@ -99,7 +105,18 @@ def main() -> int:
         "--output-normalized-json",
         type=Path,
         default=None,
-        help="Caminho do artefato normalized_document.json (padrão: <entrada>_normalized_document.json).",
+        help="Quando informado, salva o normalized_document.json neste caminho.",
+    )
+    parser.add_argument(
+        "--output-diagnostics-json",
+        type=Path,
+        default=None,
+        help="Quando informado, salva o diagnostics JSON neste caminho.",
+    )
+    parser.add_argument(
+        "--keep-history",
+        action="store_true",
+        help="Quando ativo, grava snapshots extras em output_data/historico.",
     )
     args = parser.parse_args()
 
@@ -108,10 +125,7 @@ def main() -> int:
     model_tag = get_llm_model_tag()
     output_paths = build_output_paths(input_path, model_tag)
 
-    output_normalized_json = args.output_normalized_json or output_paths["normalized_json"]
     normalized_text = loaded.normalized_document.to_json()
-    output_normalized_json.write_text(normalized_text, encoding="utf-8")
-    history_normalized = _write_history_snapshot(output_normalized_json, normalized_text)
     result = run_conversation(
         paragraphs=loaded.chunks,
         refs=loaded.refs,
@@ -123,34 +137,52 @@ def main() -> int:
     visible_comments = result.comments[:]
 
     output_json = args.output_json or output_paths["report_json"]
-    output_diagnostics_json = output_paths["diagnostics_json"] if args.output_json is None else output_json.with_name(
-        f"{output_json.stem}.diagnostics.json"
-    )
     json_text = json.dumps(
         [_serialize_comment(c) for c in visible_comments],
         ensure_ascii=False,
         indent=2,
     )
     output_json.write_text(json_text, encoding="utf-8")
-    history_json = _write_history_snapshot(output_json, json_text)
-    diagnostics_text = json.dumps(_serialize_trace(result.trace), ensure_ascii=False, indent=2)
-    output_diagnostics_json.write_text(diagnostics_text, encoding="utf-8")
-    history_diagnostics = _write_history_snapshot(output_diagnostics_json, diagnostics_text)
+    history_json = _maybe_write_history_snapshot(args.keep_history, output_json, json_text)
+
+    diagnostics_text = None
+    history_diagnostics = None
+    if args.output_diagnostics_json is not None:
+        output_diagnostics_json = args.output_diagnostics_json
+        diagnostics_text = json.dumps(_serialize_trace(result.trace), ensure_ascii=False, indent=2)
+        output_diagnostics_json.write_text(diagnostics_text, encoding="utf-8")
+        history_diagnostics = _maybe_write_history_snapshot(args.keep_history, output_diagnostics_json, diagnostics_text)
+    else:
+        output_diagnostics_json = None
+
+    history_normalized = None
+    if args.output_normalized_json is not None:
+        output_normalized_json = args.output_normalized_json
+        output_normalized_json.write_text(normalized_text, encoding="utf-8")
+        history_normalized = _maybe_write_history_snapshot(args.keep_history, output_normalized_json, normalized_text)
+    else:
+        output_normalized_json = None
 
     if loaded.kind == "docx":
         output_docx = args.output_docx or output_paths["docx"]
         docx_bytes = apply_comments_to_docx(input_path, result.comments)
         output_docx.write_bytes(docx_bytes)
-        history_docx = _write_history_snapshot(output_docx, docx_bytes)
+        history_docx = _maybe_write_history_snapshot(args.keep_history, output_docx, docx_bytes)
         print(f"DOCX comentado: {output_docx}")
-        print(f"Histórico DOCX: {history_docx}")
+        if history_docx is not None:
+            print(f"Histórico DOCX: {history_docx}")
 
     print(f"Relatório JSON: {output_json}")
-    print(f"Histórico JSON: {history_json}")
-    print(f"Diagnóstico JSON: {output_diagnostics_json}")
-    print(f"Histórico diagnóstico JSON: {history_diagnostics}")
-    print(f"Normalized JSON: {output_normalized_json}")
-    print(f"Histórico normalized JSON: {history_normalized}")
+    if history_json is not None:
+        print(f"Histórico JSON: {history_json}")
+    if output_diagnostics_json is not None:
+        print(f"Diagnóstico JSON: {output_diagnostics_json}")
+        if history_diagnostics is not None:
+            print(f"Histórico diagnóstico JSON: {history_diagnostics}")
+    if output_normalized_json is not None:
+        print(f"Normalized JSON: {output_normalized_json}")
+        if history_normalized is not None:
+            print(f"Histórico normalized JSON: {history_normalized}")
     print(f"Comentários visíveis: {len(visible_comments)}")
     print(
         "Camada verificadora: "

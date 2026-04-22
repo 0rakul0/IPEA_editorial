@@ -290,22 +290,32 @@ Exemplos de configuracao:
 - modo de contexto do agente de gramatica.
 
 As credenciais e provedores sao lidos do `.env`.
+Use como regra principal:
+
+```env
+LLM_PROVIDER=<openai|openai_compatible|ollama>
+LLM_MODEL=<nome-do-modelo>
+LLM_BASE_URL=<opcional para openai, obrigatorio para openai_compatible e ollama>
+LLM_API_KEY=<obrigatorio para openai, opcional para ollama local>
+```
+
+As variaveis legadas `OPENAI_*` e `OLLAMA_*` continuam aceitas como fallback de compatibilidade, mas `LLM_*` passou a ser a nomenclatura preferencial.
 
 ### Exemplo OpenAI
 
 ```env
 LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5.2
+LLM_MODEL=gpt-5.2
+LLM_API_KEY=sk-...
 ```
 
 ### Exemplo Ollama
 
 ```env
 LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434/v1
-OLLAMA_MODEL=llama3.1:8b
-OLLAMA_API_KEY=ollama
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_MODEL=llama3.1:8b
+LLM_API_KEY=ollama
 ```
 
 ### Exemplo OpenAI-compatible
