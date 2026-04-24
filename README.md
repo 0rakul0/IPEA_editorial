@@ -175,7 +175,7 @@ flowchart LR
     L --> M["Coordenador monta a resposta final"]
 ```
 
-Observacao: no fluxo principal atual, implementado em `src/editorial_docx/graph_chat.py`, os agentes operam de forma independente sobre a mesma preparacao do documento, mas a execucao e sempre deterministica: um agente por vez, sem fallback automatico e com seed fixa. A memoria progressiva continua local a cada agente, lote a lote, e o merge acontece apenas depois que todos terminam.
+Observacao: no fluxo principal atual, implementado em `src/editorial_docx/graph_chat.py`, os agentes operam de forma independente sobre a mesma preparacao do documento, com ate 3 agentes em paralelo, sem fallback automatico e com seed fixa. A memoria progressiva continua local a cada agente, lote a lote, e o merge acontece apenas depois que todos terminam.
 
 ## Fluxo de referencias
 
@@ -337,7 +337,7 @@ Comportamento atual fixo do runtime:
 - execucao deterministica sempre ativa;
 - seed fixa por padrao;
 - sem fallback automatico entre providers/modelos;
-- agentes executados em serie no fluxo principal.
+- ate 3 agentes executados em paralelo no fluxo principal.
 
 As credenciais e provedores sao lidos do `.env`.
 Use como regra principal:

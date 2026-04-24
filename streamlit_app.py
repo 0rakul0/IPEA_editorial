@@ -79,7 +79,7 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### Execução")
-    st.caption("Modo determinístico sempre ativo: seed fixa, agentes em série e sem fallback automático.")
+    st.caption("Modo determinístico sempre ativo: seed fixa, até 3 agentes em paralelo e sem fallback automático.")
 
     if st.button("Rodar todos os agentes", key="sidebar_run_all", use_container_width=True):
         st.session_state.pending_run = {
@@ -605,6 +605,12 @@ def _render_target_excerpt(paragraph: str, issue_excerpt: str) -> None:
 def _run_review(
     question: str,
     agents: list[str],
+    *,
+    paragraphs: list[str],
+    refs: list[str],
+    sections: list[dict],
+    user_comments: list[dict],
+    profile_key: str,
     on_progress: Callable[[str, int, int, int, int, str], None] | None = None,
     event_queue=None,
 ) -> tuple[object, list[str]]:
@@ -660,12 +666,12 @@ def _run_review(
         kwargs["on_agent_batch_status"] = on_agent_batch_status
 
     result = run_conversation(
-        st.session_state.paragraphs,
-        st.session_state.refs,
-        st.session_state.sections,
+        paragraphs,
+        refs,
+        sections,
         question,
-        user_comments=st.session_state.user_comments,
-        profile_key=st.session_state.doc_profile,
+        user_comments=user_comments,
+        profile_key=profile_key,
         **kwargs,
     )
     return result, logs
@@ -771,6 +777,13 @@ if st.session_state.normalized_json_text:
 if st.session_state.pending_run and st.session_state.paragraphs:
     run = st.session_state.pending_run
     st.session_state.pending_run = None
+    review_context = {
+        "paragraphs": list(st.session_state.paragraphs),
+        "refs": list(st.session_state.refs),
+        "sections": list(st.session_state.sections),
+        "user_comments": list(st.session_state.user_comments),
+        "profile_key": st.session_state.doc_profile,
+    }
     progress_header = st.empty()
     progress_bar = st.progress(0, text="Preparando execução dos agentes...")
     agent_progress_host = st.empty()
@@ -837,6 +850,11 @@ if st.session_state.pending_run and st.session_state.paragraphs:
             result, logs = _run_review(
                 run["question"],
                 run["agents"],
+                paragraphs=review_context["paragraphs"],
+                refs=review_context["refs"],
+                sections=review_context["sections"],
+                user_comments=review_context["user_comments"],
+                profile_key=review_context["profile_key"],
                 event_queue=event_queue,
             )
             outcome["result"] = result

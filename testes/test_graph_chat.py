@@ -1856,7 +1856,7 @@ def test_run_conversation_continues_next_batch_after_connection_failure(monkeypa
     assert trace.failed is True
 
 
-def test_run_conversation_processes_agents_serially_by_default(monkeypatch):
+def test_run_conversation_processes_up_to_three_agents_in_parallel(monkeypatch):
     state = {"active": 0, "max_active": 0}
     lock = threading.Lock()
 
@@ -1909,7 +1909,7 @@ def test_run_conversation_processes_agents_serially_by_default(monkeypatch):
     )
 
     trace_by_agent = {item.agent: item for item in result.trace.agents}
-    assert state["max_active"] == 1
+    assert state["max_active"] == 2
     assert set(trace_by_agent) == {"gramatica_ortografia", "tabelas_figuras"}
     assert all(len(item.batches) == 1 for item in trace_by_agent.values())
 

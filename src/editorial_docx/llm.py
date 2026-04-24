@@ -192,7 +192,7 @@ def get_grammar_agent_max_workers() -> int:
 
 def get_review_agent_max_workers() -> int:
     """Returns the fixed worker count for review-agent orchestration."""
-    return 1
+    return 3
 
 
 def get_runtime_settings() -> dict[str, object]:

@@ -177,11 +177,11 @@ def test_deterministic_mode_is_always_enabled(monkeypatch):
     assert get_llm_disable_fallback() is True
 
 
-def test_deterministic_mode_exposes_default_seed_and_serial_workers(monkeypatch):
+def test_deterministic_mode_exposes_default_seed_and_parallel_workers(monkeypatch):
     _clear_llm_env(monkeypatch)
 
     assert get_llm_seed() == 7
-    assert get_review_agent_max_workers() == 1
+    assert get_review_agent_max_workers() == 3
 
 
 def test_runtime_settings_reflect_explicit_seed(monkeypatch):
@@ -192,5 +192,5 @@ def test_runtime_settings_reflect_explicit_seed(monkeypatch):
     runtime = get_runtime_settings()
 
     assert runtime["seed"] == 123
-    assert runtime["review_agent_max_workers"] == 1
+    assert runtime["review_agent_max_workers"] == 3
     assert runtime["disable_fallback"] is True

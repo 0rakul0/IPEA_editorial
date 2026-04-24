@@ -37,7 +37,7 @@ class ChatState(TypedDict, total=False):
     document_excerpt: str
     running_summary: str
     profile_key: str
-    comments: list[AgentComment]
+    comments: list[object]
     answer: str
     batch_status: str
     llm_raw_comment_count: int
