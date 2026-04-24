@@ -128,7 +128,7 @@ O projeto mantem a base bibliografica em dois niveis:
 ## Fluxo do codigo
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["Usuario envia DOCX, PDF ou normalized JSON"] --> B["document_loader.py"]
     B --> C["normalized_document.py<br/>gera blocos, secoes, TOC e comentarios do usuario"]
     C --> D["pipeline/scope.py<br/>seleciona o escopo por agente"]
