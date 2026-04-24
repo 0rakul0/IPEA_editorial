@@ -9,7 +9,7 @@ from .config import build_output_paths, ensure_runtime_directories, resolve_inpu
 from .docx_utils import apply_comments_to_docx
 from .document_loader import load_document
 from .graph_chat import run_conversation
-from .llm import get_llm_model_tag
+from .llm import get_llm_model_tag, get_runtime_settings
 from .models import agent_short_label
 from .prompts import AGENT_ORDER
 
@@ -57,6 +57,30 @@ def _serialize_trace(trace) -> dict[str, object]:
             }
             for agent in trace.agents
         ]
+    }
+
+
+def _serialize_verification(summary) -> dict[str, object]:
+    """Serializes verification counts and per-comment decisions for diagnostics."""
+    if summary is None:
+        return {
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "decisions": [],
+        }
+    return {
+        "accepted_count": summary.accepted_count,
+        "rejected_count": summary.rejected_count,
+        "decisions": [
+            {
+                "accepted": decision.accepted,
+                "reason": decision.reason,
+                "source": decision.source,
+                "batch_index": decision.batch_index,
+                "comment": _serialize_comment(decision.comment),
+            }
+            for decision in summary.decisions
+        ],
     }
 
 
@@ -155,7 +179,15 @@ def main() -> int:
     history_diagnostics = None
     if args.output_diagnostics_json is not None:
         output_diagnostics_json = args.output_diagnostics_json
-        diagnostics_text = json.dumps(_serialize_trace(result.trace), ensure_ascii=False, indent=2)
+        diagnostics_text = json.dumps(
+            {
+                "runtime": get_runtime_settings(),
+                "verification": _serialize_verification(result.verification),
+                "trace": _serialize_trace(result.trace),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
         output_diagnostics_json.write_text(diagnostics_text, encoding="utf-8")
         history_diagnostics = _maybe_write_history_snapshot(args.keep_history, output_diagnostics_json, diagnostics_text)
     else:

@@ -5,8 +5,8 @@ from threading import Lock
 import time
 
 from .agents.user_reference_agent import USER_REFERENCE_AGENT
-from .config import DEFAULT_REVIEW_AGENT_MAX_WORKERS, DEFAULT_REVIEW_SUMMARY_UPDATE_INTERVAL
-from .llm import get_chat_model, get_chat_models, get_llm_retry_config
+from .config import DEFAULT_REVIEW_SUMMARY_UPDATE_INTERVAL
+from .llm import get_chat_model, get_chat_models, get_llm_retry_config, get_review_agent_max_workers
 from .models import (
     AgentBatchTrace,
     AgentComment,
@@ -174,7 +174,7 @@ def _parallel_agent_workers(agent_count: int) -> int:
     """Handles parallel agent workers."""
     if agent_count <= 1:
         return 1
-    return max(1, min(DEFAULT_REVIEW_AGENT_MAX_WORKERS, agent_count))
+    return max(1, min(get_review_agent_max_workers(), agent_count))
 
 
 def _recompute_trace_metrics(

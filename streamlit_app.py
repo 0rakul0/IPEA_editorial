@@ -19,7 +19,7 @@ from src.editorial_docx.config import INPUT_DATA_DIR, OUTPUT_DATA_DIR, build_out
 from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document, load_normalized_document
 from src.editorial_docx.graph_chat import run_conversation
-from src.editorial_docx.llm import get_llm_config, get_llm_model_tag
+from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtime_settings
 from src.editorial_docx.models import AgentComment, ExecutionTrace, VerificationSummary, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
@@ -79,6 +79,8 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### Execução")
+    st.caption("Modo determinístico sempre ativo: seed fixa, agentes em série e sem fallback automático.")
+
     if st.button("Rodar todos os agentes", key="sidebar_run_all", use_container_width=True):
         st.session_state.pending_run = {
             "question": "Faça uma revisão completa com todos os agentes ativos e liste ajustes prioritários.",
@@ -319,13 +321,38 @@ def _serialize_trace(trace: ExecutionTrace | None) -> dict[str, object]:
     }
 
 
-def _serialize_verification(summary: VerificationSummary | None) -> dict[str, int]:
-    """Handles serialize verification."""
+def _serialize_diagnostic_comment(comment: AgentComment) -> dict[str, object]:
+    """Serializes one comment payload for diagnostics exports."""
+    return {
+        "agent": AGENT_LABELS.get(comment.agent, comment.agent),
+        "agent_key": comment.agent,
+        "category": comment.category,
+        "message": comment.message,
+        "paragraph_index": comment.paragraph_index,
+        "issue_excerpt": comment.issue_excerpt,
+        "suggested_fix": comment.suggested_fix,
+        "auto_apply": comment.auto_apply,
+        "format_spec": comment.format_spec,
+    }
+
+
+def _serialize_verification(summary: VerificationSummary | None) -> dict[str, object]:
+    """Serializes verification counts and per-comment decisions for diagnostics."""
     if summary is None:
-        return {"accepted_count": 0, "rejected_count": 0}
+        return {"accepted_count": 0, "rejected_count": 0, "decisions": []}
     return {
         "accepted_count": summary.accepted_count,
         "rejected_count": summary.rejected_count,
+        "decisions": [
+            {
+                "accepted": decision.accepted,
+                "reason": decision.reason,
+                "source": decision.source,
+                "batch_index": decision.batch_index,
+                "comment": _serialize_diagnostic_comment(decision.comment),
+            }
+            for decision in summary.decisions
+        ],
     }
 
 
@@ -391,14 +418,16 @@ def _build_diagnostic_summary_text(answer: str, comments: list[AgentComment]) ->
 
 def _build_diagnostics_payload(export_comments: list[AgentComment]) -> dict[str, object]:
     """Handles build diagnostics payload."""
+    runtime = get_runtime_settings()
     return {
         "source_name": st.session_state.source_name,
         "question": st.session_state.review_question,
         "answer": st.session_state.review_answer,
         "summary": _build_diagnostic_summary_text(st.session_state.review_answer, export_comments),
         "comment_count": len(export_comments),
-        "provider": llm_config["provider"],
-        "model": llm_config["model"],
+        "provider": runtime["provider"],
+        "model": runtime["model"],
+        "runtime": runtime,
         "verification": _serialize_verification(st.session_state.review_verification),
         "trace": _serialize_trace(st.session_state.review_trace),
         "progress_logs": st.session_state.review_logs,
@@ -743,7 +772,7 @@ if st.session_state.pending_run and st.session_state.paragraphs:
     run = st.session_state.pending_run
     st.session_state.pending_run = None
     progress_header = st.empty()
-    progress_bar = st.progress(0, text="Preparando execução paralela...")
+    progress_bar = st.progress(0, text="Preparando execução dos agentes...")
     agent_progress_host = st.empty()
     progress_box = st.empty()
     progress_lines: list[str] = []
@@ -794,9 +823,7 @@ if st.session_state.pending_run and st.session_state.paragraphs:
                 st.progress(pct, text=f"{subtitle}{suffix}")
 
         overall_pct = int((accumulated_ratio / total_agents) * 100)
-        progress_header.info(
-            f"Executando revisão paralela: {completed_agents}/{total_agents} agente(s) concluído(s)."
-        )
+        progress_header.info(f"Executando revisão: {completed_agents}/{total_agents} agente(s) concluído(s).")
         progress_bar.progress(overall_pct, text=f"Progresso geral: {overall_pct}%")
         if progress_lines:
             progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(progress_lines[-14:]))
@@ -823,7 +850,7 @@ if st.session_state.pending_run and st.session_state.paragraphs:
     worker.start()
 
     try:
-        with st.spinner("Executando agentes em paralelo..."):
+        with st.spinner("Executando agentes..."):
             while worker.is_alive() or not event_queue.empty():
                 drained = False
                 while True:

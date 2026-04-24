@@ -4,7 +4,7 @@ import re
 from difflib import SequenceMatcher
 
 from ..models import AgentComment
-from ..review_patterns import _normalized_text
+from ..review_patterns import _folded_text, _normalized_text
 
 
 def _semantic_text(text: str) -> str:
@@ -30,6 +30,15 @@ def _mergeable_comment_key(comment: AgentComment) -> tuple[int | None, str]:
     return paragraph_index, _semantic_text(comment.suggested_fix)
 
 
+def _is_punctuation_comment(comment: AgentComment) -> bool:
+    """Returns whether the comment is about punctuation or spacing details."""
+    folded_blob = _folded_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
+    return any(
+        token in folded_blob
+        for token in ("pontuacao", "espaco", "hifen", "virgula", "ponto final", "dois-pontos", "aspas", "travess")
+    )
+
+
 def consolidate_semantic_comments(comments: list[AgentComment]) -> list[AgentComment]:
     """Funde comentários quase equivalentes emitidos por agentes diferentes."""
     if not comments:
@@ -44,6 +53,8 @@ def consolidate_semantic_comments(comments: list[AgentComment]) -> list[AgentCom
         for idx, existing in enumerate(merged):
             existing_key = _mergeable_comment_key(existing)
             if current_key[0] != existing_key[0]:
+                continue
+            if _is_punctuation_comment(comment) or _is_punctuation_comment(existing):
                 continue
             excerpt_similarity = _semantic_similarity(current_key[1], existing_key[1])
             msg_similarity = _semantic_similarity(current_msg, _semantic_text(existing.message))

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import editorial_docx.graph_chat as graph_chat_module
 import editorial_docx.pipeline.orchestrator as orchestrator_module
 import editorial_docx.pipeline.runtime as review_runtime_module
+from editorial_docx.__main__ import _serialize_verification as serialize_cli_verification
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
 from editorial_docx.agents.validation.shared import has_resolved_text_anchor
@@ -28,7 +29,8 @@ from editorial_docx.graph_chat import (
     _verify_batch_comments,
     run_conversation,
 )
-from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, agent_short_label
+from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, VerificationDecision, VerificationSummary, agent_short_label
+from editorial_docx.pipeline.scope import _consolidate_final_comments
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, build_agent_prompt, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
 from editorial_docx.pipeline.runtime import LLMConnectionFailure, build_coordinator_answer
@@ -528,6 +530,59 @@ def test_normalize_batch_comments_discards_grammar_comment_that_only_removes_ter
     assert normalized == []
 
 
+def test_normalize_batch_comments_preserves_grammar_punctuation_spacing_comment():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Pontuação",
+            message="Falta espaço após o ponto final, unindo duas frases.",
+            paragraph_index=0,
+            issue_excerpt="processa-los.Com",
+            suggested_fix="processá-los. Com",
+        )
+    ]
+    chunks = ["processa-los.Com"]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].issue_excerpt == "processa-los.Com"
+    assert normalized[0].suggested_fix == "processá-los. Com"
+
+
+def test_consolidate_final_comments_preserves_distinct_punctuation_comments():
+    comments = [
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Pontuação",
+            message="Falta espaço após o ponto final, unindo duas frases.",
+            paragraph_index=0,
+            issue_excerpt="processa-los.Com",
+            suggested_fix="processa-los. Com",
+        ),
+        AgentComment(
+            agent="gramatica_ortografia",
+            category="Pontuação",
+            message="Também é preciso corrigir a acentuação do verbo no mesmo trecho.",
+            paragraph_index=0,
+            issue_excerpt="processa-los.Com",
+            suggested_fix="processá-los. Com",
+        ),
+    ]
+
+    consolidated = _consolidate_final_comments(comments, ["parágrafo 1 | tipo=paragraph"])
+
+    assert len(consolidated) == 2
+    assert {item.suggested_fix for item in consolidated} == {"processa-los. Com", "processá-los. Com"}
+
+
 def test_agent_order_excludes_metadata_and_structure_from_default_run():
     assert "metadados" not in AGENT_ORDER
     assert "estrutura" in AGENT_ORDER
@@ -687,6 +742,57 @@ def test_normalize_batch_comments_adds_heuristic_for_exercicio_sugere():
     )
 
     assert any(item.issue_excerpt == "e sugerem" and item.suggested_fix == "e sugere" for item in normalized)
+
+
+def test_normalize_batch_comments_adds_heuristic_for_double_space():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["O texto  apresenta espaço duplo no meio da frase."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert any(
+        item.category == "Pontuação"
+        and item.issue_excerpt == "texto  apresenta"
+        and item.suggested_fix == "texto apresenta"
+        for item in normalized
+    )
+
+
+def test_normalize_batch_comments_adds_heuristic_for_space_before_punctuation():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["O texto apresenta erro , de espaçamento antes da vírgula."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert any(
+        item.category == "Pontuação"
+        and item.issue_excerpt == "erro ,"
+        and item.suggested_fix == "erro,"
+        for item in normalized
+    )
+
+
+def test_normalize_batch_comments_adds_heuristic_for_missing_space_after_period():
+    normalized = _normalize_batch_comments(
+        comments=[],
+        agent="gramatica_ortografia",
+        batch_indexes=[0],
+        chunks=["O sistema processa-los.Com isso, a frase fica colada."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert any(
+        item.category == "Pontuação"
+        and item.issue_excerpt == "processa-los.Com"
+        and item.suggested_fix == "processa-los. Com"
+        for item in normalized
+    )
 
 
 def test_normalize_batch_comments_discards_plural_copula_for_singular_head():
@@ -1750,7 +1856,7 @@ def test_run_conversation_continues_next_batch_after_connection_failure(monkeypa
     assert trace.failed is True
 
 
-def test_run_conversation_processes_agents_in_parallel(monkeypatch):
+def test_run_conversation_processes_agents_serially_by_default(monkeypatch):
     state = {"active": 0, "max_active": 0}
     lock = threading.Lock()
 
@@ -1803,9 +1909,40 @@ def test_run_conversation_processes_agents_in_parallel(monkeypatch):
     )
 
     trace_by_agent = {item.agent: item for item in result.trace.agents}
-    assert state["max_active"] >= 2
+    assert state["max_active"] == 1
     assert set(trace_by_agent) == {"gramatica_ortografia", "tabelas_figuras"}
     assert all(len(item.batches) == 1 for item in trace_by_agent.values())
+
+
+def test_serialize_cli_verification_includes_decision_reasons():
+    summary = VerificationSummary(
+        decisions=[
+            VerificationDecision(
+                comment=AgentComment(
+                    agent="gramatica_ortografia",
+                    category="Pontuação",
+                    message="Falta espaço após o ponto final.",
+                    paragraph_index=0,
+                    issue_excerpt="processa-los.Com",
+                    suggested_fix="processá-los. Com",
+                ),
+                accepted=False,
+                reason="comentário duplicado",
+                source="llm",
+                batch_index=2,
+            )
+        ],
+        accepted_count=0,
+        rejected_count=1,
+    )
+
+    payload = serialize_cli_verification(summary)
+
+    assert payload["accepted_count"] == 0
+    assert payload["rejected_count"] == 1
+    assert payload["decisions"][0]["reason"] == "comentário duplicado"
+    assert payload["decisions"][0]["batch_index"] == 2
+    assert payload["decisions"][0]["comment"]["issue_excerpt"] == "processa-los.Com"
 
 
 def test_run_conversation_processes_grammar_batches_sequentially_by_default(monkeypatch):
@@ -3094,6 +3231,35 @@ def test_normalize_batch_comments_discards_typography_for_generic_body_paragraph
     assert normalized == []
 
 
+def test_normalize_batch_comments_accepts_typography_for_body_paragraph_beyond_intro_with_strong_spec():
+    body_text = "Este parágrafo de corpo precisa manter o alinhamento e o espaçamento previstos no template."
+    comments = [
+        AgentComment(
+            agent="tipografia",
+            category="Tipografia",
+            message="Aplicar o padrão tipográfico do corpo do texto.",
+            paragraph_index=30,
+            issue_excerpt=body_text,
+            suggested_fix="Manter o corpo em tamanho 12, alinhamento justificado e espaçamento padrão.",
+            auto_apply=True,
+            format_spec="size_pt=12; align=justify; line_spacing=1.5",
+        )
+    ]
+    chunks = ["Texto introdutório."] * 30 + [body_text]
+    refs = ["parágrafo 1 | tipo=paragraph | estilo=Normal"] * 31
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="tipografia",
+        batch_indexes=[30],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].format_spec == "size_pt=12; align=justify; line_spacing=1.5"
+
+
 def test_agent_scope_indexes_limits_tipografia_to_structured_blocks():
     chunks = ["1 INTRODUÃ‡ÃƒO", "Texto A", "GrÃ¡fico 1: Resultado", "Fonte: Base", "SILVA, J. TÃ­tulo. 2020."]
     refs = [
@@ -3135,6 +3301,35 @@ def test_normalize_batch_comments_accepts_typography_capitalization_instruction(
 
     assert len(normalized) == 1
     assert normalized[0].format_spec == "size_pt=12; bold=true; case=upper"
+
+
+def test_normalize_batch_comments_accepts_table_source_label_review_with_neighbor_source_line():
+    comments = [
+        AgentComment(
+            agent="tabelas_figuras",
+            category="tabelas_figuras",
+            message="A coluna “Fonte” pode ser renomeada para evitar confusão com a linha de fonte abaixo da tabela.",
+            paragraph_index=0,
+            issue_excerpt="Fonte",
+            suggested_fix="Renomear o cabeçalho da coluna para “Origem do dado”.",
+        )
+    ]
+    chunks = ["Fonte", "Fonte: Base administrativa."]
+    refs = [
+        "parágrafo 1 | tipo=table_cell",
+        "parágrafo 2 | tipo=paragraph",
+    ]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="tabelas_figuras",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].issue_excerpt == "Fonte"
 
 
 def test_normalize_batch_comments_discards_font_only_typography_instruction():

@@ -1,5 +1,15 @@
 import editorial_docx.llm as llm_module
-from editorial_docx.llm import get_llm_candidate_configs, get_llm_config, get_llm_model_tag, get_llm_retry_config
+from editorial_docx.llm import (
+    get_deterministic_mode,
+    get_llm_candidate_configs,
+    get_llm_config,
+    get_llm_disable_fallback,
+    get_llm_model_tag,
+    get_llm_retry_config,
+    get_llm_seed,
+    get_review_agent_max_workers,
+    get_runtime_settings,
+)
 
 
 def _clear_llm_env(monkeypatch):
@@ -14,6 +24,12 @@ def _clear_llm_env(monkeypatch):
         "OLLAMA_MODEL",
         "OLLAMA_BASE_URL",
         "OLLAMA_API_KEY",
+        "LLM_DETERMINISTIC_MODE",
+        "REVIEW_DETERMINISTIC_MODE",
+        "LLM_DISABLE_FALLBACK",
+        "LLM_SEED",
+        "REVIEW_AGENT_MAX_WORKERS",
+        "GRAMMAR_AGENT_MAX_WORKERS",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(llm_module, "_load_env", lambda: None)
@@ -68,9 +84,8 @@ def test_get_llm_candidate_configs_prefers_explicit_provider_before_openai(monke
 
     configs = get_llm_candidate_configs()
 
-    assert [cfg["provider"] for cfg in configs] == ["openai_compatible", "openai"]
+    assert [cfg["provider"] for cfg in configs] == ["openai_compatible"]
     assert configs[0]["model"] == "modelo-interno"
-    assert configs[1]["model"] == "modelo-interno"
 
 
 def test_get_llm_candidate_configs_uses_fallback_when_openai_is_unavailable(monkeypatch):
@@ -153,3 +168,29 @@ def test_get_llm_retry_config_reads_env(monkeypatch):
 
     assert config["max_retries"] == 5
     assert config["backoff_seconds"] == 2.5
+
+
+def test_deterministic_mode_is_always_enabled(monkeypatch):
+    _clear_llm_env(monkeypatch)
+
+    assert get_deterministic_mode() is True
+    assert get_llm_disable_fallback() is True
+
+
+def test_deterministic_mode_exposes_default_seed_and_serial_workers(monkeypatch):
+    _clear_llm_env(monkeypatch)
+
+    assert get_llm_seed() == 7
+    assert get_review_agent_max_workers() == 1
+
+
+def test_runtime_settings_reflect_explicit_seed(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_SEED", "123")
+
+    runtime = get_runtime_settings()
+
+    assert runtime["seed"] == 123
+    assert runtime["review_agent_max_workers"] == 1
+    assert runtime["disable_fallback"] is True

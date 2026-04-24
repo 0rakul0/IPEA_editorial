@@ -199,5 +199,11 @@ def basic_comment_rejection_reason(comment: AgentComment) -> str | None:
 
     if comment.issue_excerpt and comment.suggested_fix and not comment.auto_apply:
         if _normalized_text(comment.issue_excerpt) == _normalized_text(comment.suggested_fix):
+            folded_blob = _folded_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
+            if any(
+                token in folded_blob
+                for token in ("pontuacao", "espaco", "hifen", "virgula", "ponto final", "dois-pontos", "aspas", "travess")
+            ) and (comment.issue_excerpt or "").strip() != (comment.suggested_fix or "").strip():
+                return None
             return "sugestão idêntica ao trecho"
     return None

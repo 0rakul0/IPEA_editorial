@@ -49,10 +49,14 @@ Isso significa que:
 
 - o texto inteiro do escopo de gramatica vai em uma unica chamada por passagem;
 - nao ha micro-lotes paralelos para esse agente;
+- o agente foi ampliado para buscar nao so ortografia, pontuacao, concordancia e regencia, mas tambem microerros mecanicos de escrita, como espaco duplo, falta de espaco apos pontuacao e espaco indevido antes de pontuacao;
+- heuristicas locais complementam a LLM para capturar erros objetivos recorrentes de concordancia e espacamento;
 - o ponto central dessa configuracao fica em `src/editorial_docx/config.py`, via `GRAMMAR_CONTEXT_MODE`.
 
 Arquivos principais desse fluxo:
 
+- `src/editorial_docx/agents/heuristics/grammar.py`
+- `src/editorial_docx/agents/validation/grammar.py`
 - `src/editorial_docx/pipeline/context.py`
 - `src/editorial_docx/pipeline/runtime.py`
 - `src/editorial_docx/prompts/prompt.py`
@@ -171,7 +175,7 @@ flowchart LR
     L --> M["Coordenador monta a resposta final"]
 ```
 
-Observacao: no fluxo principal atual, implementado em `src/editorial_docx/graph_chat.py`, os agentes operam de forma independente sobre a mesma preparacao do documento e podem executar em paralelo. A memoria progressiva continua local a cada agente, lote a lote, e o merge acontece apenas depois que todos terminam.
+Observacao: no fluxo principal atual, implementado em `src/editorial_docx/graph_chat.py`, os agentes operam de forma independente sobre a mesma preparacao do documento, mas a execucao e sempre deterministica: um agente por vez, sem fallback automatico e com seed fixa. A memoria progressiva continua local a cada agente, lote a lote, e o merge acontece apenas depois que todos terminam.
 
 ## Fluxo de referencias
 
@@ -264,6 +268,7 @@ O app:
 
 - lista documentos de `input_data/`;
 - permite subir novos arquivos;
+- mostra progresso geral e progresso por agente durante a execucao;
 - salva artefatos em `output_data/`.
 
 ### CLI
@@ -307,6 +312,10 @@ O arquivo `diagnostics.json` resume rastros de execucao por agente e por lote, i
 - contagem de comentarios do LLM;
 - comentarios aceitos por heuristica;
 - status de cada lote.
+- decisao de verificacao por comentario;
+- motivo de aceite ou rejeicao (`VerificationDecision.reason`);
+- origem da decisao (`llm` ou `heuristic`);
+- comentario serializado, com trecho, sugestao e batch de origem.
 
 ## Configuracao
 
@@ -322,6 +331,13 @@ Exemplos de configuracao:
 - retries;
 - limites de batch;
 - modo de contexto do agente de gramatica.
+
+Comportamento atual fixo do runtime:
+
+- execucao deterministica sempre ativa;
+- seed fixa por padrao;
+- sem fallback automatico entre providers/modelos;
+- agentes executados em serie no fluxo principal.
 
 As credenciais e provedores sao lidos do `.env`.
 Use como regra principal:

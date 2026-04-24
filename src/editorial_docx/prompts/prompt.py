@@ -220,7 +220,8 @@ def _agent_context_guidance(agent_name: str) -> str:
         if GRAMMAR_CONTEXT_MODE == TEXTO_INTEIRO:
             return (
                 "O contexto abaixo traz o texto inteiro enviado para esta passagem do agente de gramática e ortografia.\n"
-                "- analise somente problemas gramaticais, ortográficos, de pontuação e concordância sustentados pelo próprio texto;\n"
+                "- analise problemas gramaticais, ortográficos, de pontuação, concordância, regência, semântica local objetiva e microerros mecânicos de escrita sustentados pelo próprio texto;\n"
+                "- inclua também espaço duplo, falta de espaço após pontuação e espaço indevido antes de pontuação quando isso estiver materializado no trecho;\n"
                 "- ancore cada comentário no trecho exato onde o problema aparece;\n"
                 "- se a correção depender de informação externa ou de decisão editorial, responda `[]`;\n"
                 "- não transforme expressão temporal, número isolado, substantivo comum + ano ou menção temática em citação bibliográfica;\n\n"
@@ -228,6 +229,7 @@ def _agent_context_guidance(agent_name: str) -> str:
         return (
             "O contexto abaixo vem separado em duas zonas: janela mínima de contexto e trecho-alvo.\n"
             "- use a janela mínima apenas para desambiguar o trecho-alvo;\n"
+            "- procure também microerros mecânicos de escrita, como espaço duplo e pontuação mal espaçada, além de erros gramaticais e semânticos locais objetivos;\n"
             "- ancore cada comentário no trecho-alvo ou em evidência local explícita da janela;\n"
             "- se a correção depender de contexto documental mais amplo, responda `[]`;\n"
             "- não transforme expressão temporal, número isolado, substantivo comum + ano ou menção temática em citação bibliográfica;\n\n"

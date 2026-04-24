@@ -16,11 +16,9 @@ def rejection_reason(ctx: ValidationContext) -> str | None:
         return "descartado por regra de verificação"
     if comment.issue_excerpt and not matches_whole_paragraph(comment, ctx.chunks):
         return "descartado por regra de verificação"
-    if ctx.block_type == "paragraph" and isinstance(comment.paragraph_index, int) and comment.paragraph_index >= 24:
+    if ctx.block_type == "reference_heading":
         return "descartado por regra de verificação"
-    if ctx.block_type in {"reference_entry", "reference_heading"}:
-        return "descartado por regra de verificação"
-    if ctx.block_type not in {"heading", "caption", "paragraph"}:
+    if ctx.block_type not in {"heading", "caption", "paragraph", "reference_entry"}:
         return "descartado por regra de verificação"
     fix = (comment.suggested_fix or "").casefold()
     if "alterar para '" in fix or 'alterar para "' in fix:

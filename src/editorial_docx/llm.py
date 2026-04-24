@@ -6,9 +6,9 @@ import re
 from dotenv import load_dotenv
 
 from .config import (
-    DEFAULT_GRAMMAR_AGENT_MAX_WORKERS,
     DEFAULT_LLM_MAX_RETRIES,
     DEFAULT_LLM_RETRY_BACKOFF_SECONDS,
+    DEFAULT_LLM_SEED,
     DEFAULT_LLM_TIMEOUT_SECONDS,
     DEFAULT_OLLAMA_API_KEY,
     DEFAULT_OLLAMA_BASE_URL,
@@ -19,7 +19,7 @@ from .config import (
 
 
 def _load_env() -> None:
-    """Handles load env."""
+    """Loads environment variables from the project `.env` when available."""
     env_path = PROJECT_ROOT / ".env"
 
     if env_path.exists():
@@ -29,7 +29,7 @@ def _load_env() -> None:
 
 
 def _read_env(*keys: str, default: str = "") -> str:
-    """Handles read env."""
+    """Returns the first non-empty environment value among the provided keys."""
     for key in keys:
         value = os.getenv(key)
         if value is not None and value.strip():
@@ -38,12 +38,12 @@ def _read_env(*keys: str, default: str = "") -> str:
 
 
 def _has_env(*keys: str) -> bool:
-    """Handles has env."""
+    """Returns whether any provided environment variable has a non-empty value."""
     return any(bool(os.getenv(key, "").strip()) for key in keys)
 
 
 def _infer_provider() -> str:
-    """Handles infer provider."""
+    """Infers the preferred LLM provider from the current environment."""
     explicit_provider = _read_env("LLM_PROVIDER").lower()
     if explicit_provider:
         return explicit_provider
@@ -58,7 +58,7 @@ def _infer_provider() -> str:
 
 
 def _build_provider_config(provider: str) -> dict[str, str]:
-    """Handles build provider config."""
+    """Builds the effective configuration for one provider family."""
     provider = (provider or "").strip().lower()
 
     if provider == "ollama":
@@ -86,7 +86,7 @@ def _build_provider_config(provider: str) -> dict[str, str]:
 
 
 def _is_config_usable(config: dict[str, str]) -> bool:
-    """Handles is config usable."""
+    """Returns whether a provider configuration has the minimum required fields."""
     provider = config.get("provider", "").strip().lower()
     if provider == "openai":
         return bool(config.get("api_key"))
@@ -98,31 +98,18 @@ def _is_config_usable(config: dict[str, str]) -> bool:
 
 
 def get_llm_candidate_configs() -> list[dict[str, str]]:
-    """Returns llm candidate configs."""
+    """Returns the ordered list of usable provider configurations."""
     _load_env()
 
     preferred_provider = _infer_provider()
-
-    candidates: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
-
-    provider_order = [preferred_provider]
-    if preferred_provider != "openai":
-        provider_order.append("openai")
-
-    for provider in provider_order:
-        config = _build_provider_config(provider)
-        key = (config["provider"], config["model"], config["base_url"])
-        if key in seen or not _is_config_usable(config):
-            continue
-        seen.add(key)
-        candidates.append(config)
-
-    return candidates
+    config = _build_provider_config(preferred_provider)
+    if _is_config_usable(config):
+        return [config]
+    return []
 
 
 def get_llm_config() -> dict[str, str]:
-    """Returns llm config."""
+    """Returns the primary LLM configuration used by the application."""
     candidates = get_llm_candidate_configs()
     if candidates:
         return candidates[0]
@@ -130,7 +117,7 @@ def get_llm_config() -> dict[str, str]:
 
 
 def get_llm_model_tag(config: dict[str, str] | None = None) -> str:
-    """Returns llm model tag."""
+    """Builds a filesystem-safe tag from the effective model name."""
     current = config or get_llm_config()
     model_name = (current.get("model") or "modelo").strip().lower()
     model_name = model_name.replace("\\", "/").split("/")[-1]
@@ -141,7 +128,7 @@ def get_llm_model_tag(config: dict[str, str] | None = None) -> str:
 
 
 def get_llm_retry_config() -> dict[str, int | float]:
-    """Returns llm retry config."""
+    """Returns the retry policy for transient LLM failures."""
     _load_env()
 
     raw_attempts = (os.getenv("LLM_MAX_RETRIES") or "").strip()
@@ -163,8 +150,31 @@ def get_llm_retry_config() -> dict[str, int | float]:
     }
 
 
+def get_deterministic_mode() -> bool:
+    """Returns the fixed deterministic policy used by the project."""
+    return True
+
+
+def get_llm_disable_fallback() -> bool:
+    """Returns whether automatic provider fallback is disabled."""
+    return True
+
+
+def get_llm_seed() -> int | None:
+    """Returns the fixed LLM seed, allowing only an explicit env override."""
+    _load_env()
+
+    raw_seed = (os.getenv("LLM_SEED") or "").strip()
+    if raw_seed:
+        try:
+            return int(raw_seed)
+        except ValueError:
+            return DEFAULT_LLM_SEED
+    return DEFAULT_LLM_SEED
+
+
 def get_llm_timeout_seconds() -> float:
-    """Returns llm timeout seconds."""
+    """Returns the configured timeout for LLM requests."""
     _load_env()
 
     raw_timeout = (os.getenv("LLM_TIMEOUT_SECONDS") or "").strip()
@@ -176,25 +186,40 @@ def get_llm_timeout_seconds() -> float:
 
 
 def get_grammar_agent_max_workers() -> int:
-    """Returns grammar agent max workers."""
-    _load_env()
+    """Returns the fixed worker count for the grammar agent."""
+    return 1
 
-    raw_workers = (os.getenv("GRAMMAR_AGENT_MAX_WORKERS") or "").strip()
-    try:
-        workers = max(1, int(raw_workers)) if raw_workers else DEFAULT_GRAMMAR_AGENT_MAX_WORKERS
-    except ValueError:
-        workers = DEFAULT_GRAMMAR_AGENT_MAX_WORKERS
-    return workers
+
+def get_review_agent_max_workers() -> int:
+    """Returns the fixed worker count for review-agent orchestration."""
+    return 1
+
+
+def get_runtime_settings() -> dict[str, object]:
+    """Returns the effective runtime settings used by the review pipeline."""
+    config = get_llm_config()
+    return {
+        "provider": config.get("provider", ""),
+        "model": config.get("model", ""),
+        "base_url": config.get("base_url", ""),
+        "deterministic_mode": get_deterministic_mode(),
+        "seed": get_llm_seed(),
+        "disable_fallback": get_llm_disable_fallback(),
+        "review_agent_max_workers": get_review_agent_max_workers(),
+        "grammar_agent_max_workers": get_grammar_agent_max_workers(),
+        "timeout_seconds": get_llm_timeout_seconds(),
+        "retry": get_llm_retry_config(),
+    }
 
 
 def get_chat_model():
-    """Returns chat model."""
+    """Returns the primary chat model instance when available."""
     models = get_chat_models()
     return models[0][1] if models else None
 
 
 def get_chat_models():
-    """Returns chat models."""
+    """Builds the configured chat model instances for the active provider list."""
     try:
         from langchain_openai import ChatOpenAI
     except Exception:
@@ -202,6 +227,7 @@ def get_chat_models():
 
     out = []
     timeout_seconds = get_llm_timeout_seconds()
+    seed = get_llm_seed()
     for config in get_llm_candidate_configs():
         kwargs: dict[str, str | int | float] = {
             "model": config["model"],
@@ -210,6 +236,8 @@ def get_chat_models():
             "timeout": timeout_seconds,
             "max_retries": 0,
         }
+        if seed is not None:
+            kwargs["seed"] = seed
         if config["base_url"]:
             kwargs["base_url"] = config["base_url"]
         out.append((config, ChatOpenAI(**kwargs)))
