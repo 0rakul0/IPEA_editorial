@@ -1750,6 +1750,64 @@ def test_run_conversation_continues_next_batch_after_connection_failure(monkeypa
     assert trace.failed is True
 
 
+def test_run_conversation_processes_agents_in_parallel(monkeypatch):
+    state = {"active": 0, "max_active": 0}
+    lock = threading.Lock()
+
+    class FakeAgentApp:
+        def __init__(self, agent_name):
+            self.agent_name = agent_name
+
+        def stream(self, initial_state, stream_mode="updates"):
+            with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            try:
+                time.sleep(0.05)
+                yield {
+                    self.agent_name: {
+                        "comments": [
+                            *initial_state["comments"],
+                            AgentComment(
+                                agent=self.agent_name,
+                                category="Ajuste",
+                                message=f"Revisar lote do agente {self.agent_name}.",
+                                paragraph_index=0,
+                                issue_excerpt=f"trecho {self.agent_name}",
+                                suggested_fix=f"ajuste {self.agent_name}",
+                            ),
+                        ],
+                        "batch_status": "ok",
+                        "llm_raw_comment_count": 1,
+                        "llm_post_review_comment_count": 1,
+                    }
+                }
+            finally:
+                with lock:
+                    state["active"] -= 1
+
+    monkeypatch.setattr(
+        graph_chat_module,
+        "_build_graph",
+        lambda agent_order, include_coordinator=False: FakeAgentApp(agent_order[0]),
+    )
+    monkeypatch.setattr(graph_chat_module, "_update_running_summary", lambda **kwargs: "memÃ³ria estÃ¡vel")
+    monkeypatch.setattr(graph_chat_module, "coordinate_answer", lambda question, comments: "Resumo dos agentes.")
+
+    result = run_conversation(
+        paragraphs=["Tabela 1 DecomposiÃ§Ã£o da renda."],
+        refs=["parÃ¡grafo 1 | tipo=caption"],
+        sections=[],
+        question="Revise",
+        selected_agents=["gramatica_ortografia", "tabelas_figuras"],
+    )
+
+    trace_by_agent = {item.agent: item for item in result.trace.agents}
+    assert state["max_active"] >= 2
+    assert set(trace_by_agent) == {"gramatica_ortografia", "tabelas_figuras"}
+    assert all(len(item.batches) == 1 for item in trace_by_agent.values())
+
+
 def test_run_conversation_processes_grammar_batches_sequentially_by_default(monkeypatch):
     state = {"active": 0, "max_active": 0}
     lock = threading.Lock()

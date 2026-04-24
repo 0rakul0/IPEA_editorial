@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -15,6 +15,7 @@ from .prompts import AGENT_ORDER
 
 
 def _serialize_comment(comment) -> dict[str, object]:
+    """Handles serialize comment."""
     return {
         "agent": agent_short_label(comment.agent),
         "category": comment.category,
@@ -26,6 +27,7 @@ def _serialize_comment(comment) -> dict[str, object]:
 
 
 def _serialize_trace(trace) -> dict[str, object]:
+    """Handles serialize trace."""
     return {
         "agents": [
             {
@@ -59,10 +61,12 @@ def _serialize_trace(trace) -> dict[str, object]:
 
 
 def _history_stamp() -> str:
+    """Handles history stamp."""
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def _write_history_snapshot(main_path: Path, content: str | bytes) -> Path:
+    """Handles write history snapshot."""
     history_dir = main_path.parent / "historico"
     history_dir.mkdir(parents=True, exist_ok=True)
     history_path = history_dir / f"{main_path.stem}__{_history_stamp()}{main_path.suffix}"
@@ -74,12 +78,14 @@ def _write_history_snapshot(main_path: Path, content: str | bytes) -> Path:
 
 
 def _maybe_write_history_snapshot(enabled: bool, main_path: Path, content: str | bytes) -> Path | None:
+    """Handles maybe write history snapshot."""
     if not enabled:
         return None
     return _write_history_snapshot(main_path, content)
 
 
 def main() -> int:
+    """Runs the command-line entry point."""
     ensure_runtime_directories()
 
     parser = argparse.ArgumentParser(description="Executa revisao editorial em arquivo DOCX, PDF ou normalized JSON.")

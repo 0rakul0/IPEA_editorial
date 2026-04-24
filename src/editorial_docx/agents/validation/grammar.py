@@ -16,6 +16,7 @@ from .shared import ValidationContext, has_resolved_text_anchor
 
 
 def keep_rejection_reason(ctx: ValidationContext) -> str | None:
+    """Handles keep rejection reason."""
     comment = ctx.comment
     source_text = ctx.source_text
     grammar_blob = _normalized_text(" ".join([comment.category or "", comment.message or "", comment.suggested_fix or ""]))
@@ -58,6 +59,7 @@ def keep_rejection_reason(ctx: ValidationContext) -> str | None:
 
 
 def detailed_rejection_reason(ctx: ValidationContext) -> str | None:
+    """Handles detailed rejection reason."""
     excerpt = ctx.comment.issue_excerpt or ctx.source_text
     if _is_grammar_rewrite_or_regency_comment(ctx.comment.message, ctx.comment.suggested_fix):
         return "comentário gramatical de reescrita ou regência discutível"

@@ -81,6 +81,7 @@ def run_benchmark_document(input_path: Path, output_dir: Path) -> BenchmarkRunRe
 
 
 def main() -> int:
+    """Runs the command-line entry point."""
     parser = argparse.ArgumentParser(description="Executa benchmark reproduzível do pipeline editorial.")
     parser.add_argument("inputs", nargs="*", type=Path, help="Documentos DOCX/PDF a serem avaliados.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Diretório onde os artefatos serão salvos.")

@@ -52,6 +52,7 @@ def _should_keep_comment(comment: AgentComment, agent: str, chunks: list[str], r
 
 
 def _comment_rejection_reason(comment: AgentComment, agent: str, chunks: list[str], refs: list[str]) -> str | None:
+    """Handles comment rejection reason."""
     basic_reason = _basic_comment_rejection_reason(comment)
     if basic_reason is not None:
         return basic_reason
@@ -79,6 +80,7 @@ def _comment_rejection_reason(comment: AgentComment, agent: str, chunks: list[st
 
 
 def _summarize_verification(decisions: list[VerificationDecision]) -> VerificationSummary:
+    """Handles summarize verification."""
     accepted_count = sum(1 for decision in decisions if decision.accepted)
     rejected_count = sum(1 for decision in decisions if not decision.accepted)
     return VerificationSummary(
@@ -125,6 +127,7 @@ def _build_batch_verification_candidates(
     reference_pipeline: ReferencePipelineArtifact | None = None,
     batch_index: int | None = None,
 ) -> list[VerificationCandidate]:
+    """Handles build batch verification candidates."""
     candidates: list[VerificationCandidate] = []
     for comment in comments:
         remapped = _limit_auto_apply(_remap_comment_index(comment, batch_indexes=batch_indexes, chunks=chunks))
@@ -146,6 +149,7 @@ def _verify_comment_candidates(
     refs: list[str],
     existing_comments: list[AgentComment] | None = None,
 ) -> tuple[list[AgentComment], list[VerificationDecision]]:
+    """Handles verify comment candidates."""
     accepted: list[AgentComment] = []
     decisions: list[VerificationDecision] = []
     seen_existing = {_comment_key(item) for item in (existing_comments or [])}
@@ -200,6 +204,7 @@ def _verify_comment_candidates(
 
 
 def _format_batch_status(status: str, decisions: list[VerificationDecision]) -> str:
+    """Handles format batch status."""
     summary = _summarize_verification(decisions)
     base = (status or "").strip()
     suffix = f"verif: {summary.accepted_count} aceitos, {summary.rejected_count} rejeitados"

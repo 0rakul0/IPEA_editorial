@@ -19,6 +19,7 @@ from .config import (
 
 
 def _load_env() -> None:
+    """Handles load env."""
     env_path = PROJECT_ROOT / ".env"
 
     if env_path.exists():
@@ -28,6 +29,7 @@ def _load_env() -> None:
 
 
 def _read_env(*keys: str, default: str = "") -> str:
+    """Handles read env."""
     for key in keys:
         value = os.getenv(key)
         if value is not None and value.strip():
@@ -36,10 +38,12 @@ def _read_env(*keys: str, default: str = "") -> str:
 
 
 def _has_env(*keys: str) -> bool:
+    """Handles has env."""
     return any(bool(os.getenv(key, "").strip()) for key in keys)
 
 
 def _infer_provider() -> str:
+    """Handles infer provider."""
     explicit_provider = _read_env("LLM_PROVIDER").lower()
     if explicit_provider:
         return explicit_provider
@@ -54,6 +58,7 @@ def _infer_provider() -> str:
 
 
 def _build_provider_config(provider: str) -> dict[str, str]:
+    """Handles build provider config."""
     provider = (provider or "").strip().lower()
 
     if provider == "ollama":
@@ -81,6 +86,7 @@ def _build_provider_config(provider: str) -> dict[str, str]:
 
 
 def _is_config_usable(config: dict[str, str]) -> bool:
+    """Handles is config usable."""
     provider = config.get("provider", "").strip().lower()
     if provider == "openai":
         return bool(config.get("api_key"))
@@ -92,6 +98,7 @@ def _is_config_usable(config: dict[str, str]) -> bool:
 
 
 def get_llm_candidate_configs() -> list[dict[str, str]]:
+    """Returns llm candidate configs."""
     _load_env()
 
     preferred_provider = _infer_provider()
@@ -115,6 +122,7 @@ def get_llm_candidate_configs() -> list[dict[str, str]]:
 
 
 def get_llm_config() -> dict[str, str]:
+    """Returns llm config."""
     candidates = get_llm_candidate_configs()
     if candidates:
         return candidates[0]
@@ -122,6 +130,7 @@ def get_llm_config() -> dict[str, str]:
 
 
 def get_llm_model_tag(config: dict[str, str] | None = None) -> str:
+    """Returns llm model tag."""
     current = config or get_llm_config()
     model_name = (current.get("model") or "modelo").strip().lower()
     model_name = model_name.replace("\\", "/").split("/")[-1]
@@ -132,6 +141,7 @@ def get_llm_model_tag(config: dict[str, str] | None = None) -> str:
 
 
 def get_llm_retry_config() -> dict[str, int | float]:
+    """Returns llm retry config."""
     _load_env()
 
     raw_attempts = (os.getenv("LLM_MAX_RETRIES") or "").strip()
@@ -154,6 +164,7 @@ def get_llm_retry_config() -> dict[str, int | float]:
 
 
 def get_llm_timeout_seconds() -> float:
+    """Returns llm timeout seconds."""
     _load_env()
 
     raw_timeout = (os.getenv("LLM_TIMEOUT_SECONDS") or "").strip()
@@ -165,6 +176,7 @@ def get_llm_timeout_seconds() -> float:
 
 
 def get_grammar_agent_max_workers() -> int:
+    """Returns grammar agent max workers."""
     _load_env()
 
     raw_workers = (os.getenv("GRAMMAR_AGENT_MAX_WORKERS") or "").strip()
@@ -176,11 +188,13 @@ def get_grammar_agent_max_workers() -> int:
 
 
 def get_chat_model():
+    """Returns chat model."""
     models = get_chat_models()
     return models[0][1] if models else None
 
 
 def get_chat_models():
+    """Returns chat models."""
     try:
         from langchain_openai import ChatOpenAI
     except Exception:

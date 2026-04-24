@@ -7,6 +7,7 @@ from .shared import ValidationContext, has_neighbor_with_prefix, is_safe_text_no
 
 
 def rejection_reason(ctx: ValidationContext) -> str | None:
+    """Handles rejection reason."""
     comment = ctx.comment
     block_type = ctx.block_type
     issue_excerpt = _normalized_text(comment.issue_excerpt)

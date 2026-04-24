@@ -5,6 +5,7 @@ from .shared import expand_neighbors, expand_section_ranges, find_content_indexe
 
 
 def build_scope(chunks: list[str], refs: list[str], sections, total: int) -> list[int]:
+    """Builds scope."""
     abstract_keywords = ("sinopse", "abstract", "resumo", "summary")
     sec = expand_section_ranges(sections, abstract_keywords)
     heading_content = [

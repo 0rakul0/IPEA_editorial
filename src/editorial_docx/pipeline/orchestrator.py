@@ -45,6 +45,7 @@ class ChatState(TypedDict, total=False):
 
 
 def _is_llm_failure_status(status: str) -> bool:
+    """Handles is llm failure status."""
     folded = _folded_text(status)
     return (
         "falha de conexao da llm" in folded
@@ -54,7 +55,9 @@ def _is_llm_failure_status(status: str) -> bool:
 
 
 def _agent_node(agent: str):
+    """Handles agent node."""
     def run(state: ChatState) -> ChatState:
+        """Handles run."""
         if get_chat_model() is None:
             return {
                 "comments": state.get("comments", []),
@@ -121,6 +124,7 @@ def _agent_node(agent: str):
 
 
 def _build_graph(agent_order: list[str], include_coordinator: bool = False):
+    """Handles build graph."""
     graph = StateGraph(ChatState)
 
     for agent in agent_order:

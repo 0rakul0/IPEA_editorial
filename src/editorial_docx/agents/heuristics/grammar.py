@@ -7,10 +7,12 @@ from ...review_patterns import _ref_block_type
 
 
 def heuristic_grammar_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
+    """Handles heuristic grammar comments."""
     comments: list[AgentComment] = []
     seen: set[tuple[int, str, str]] = set()
 
     def add(idx: int, issue: str, fix: str, message: str, category: str = "grammar") -> None:
+        """Adds an item to the current collection."""
         key = (idx, issue, fix)
         if key in seen:
             return

@@ -5,6 +5,7 @@ from .shared import ValidationContext, matches_whole_paragraph
 
 
 def rejection_reason(ctx: ValidationContext) -> str | None:
+    """Handles rejection reason."""
     comment = ctx.comment
     spec = _parse_format_spec(comment.format_spec)
     if not spec:

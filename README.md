@@ -128,7 +128,7 @@ O projeto mantem a base bibliografica em dois niveis:
 ## Fluxo do codigo
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["Usuario envia DOCX, PDF ou normalized JSON"] --> B["document_loader.py"]
     B --> C["normalized_document.py<br/>gera blocos, secoes, TOC e comentarios do usuario"]
     C --> D["pipeline/scope.py<br/>seleciona o escopo por agente"]
@@ -140,6 +140,38 @@ flowchart TD
     I --> J["pipeline/coordinator.py"]
     J --> K["CLI / Streamlit / docx_utils.py"]
 ```
+
+## Fluxo de atuacao dos agentes
+
+```mermaid
+flowchart LR
+    A["NormalizedDocument<br/>chunks, refs, secoes e comentarios do usuario"] --> B["pipeline/scope.py<br/>seleciona o escopo por agente"]
+    B --> C["pipeline/context.py<br/>monta lotes, headings e janelas de contexto"]
+    C --> D["PreparedReviewDocument"]
+    D --> E1["sinopse_abstract"]
+    D --> E2["gramatica_ortografia"]
+    D --> E3["tabelas_figuras"]
+    D --> E4["estrutura"]
+    D --> E5["tipografia"]
+    D --> E6["referencias"]
+    D --> E7["comentarios_usuario_referencias"]
+    E1 --> F["Cada agente opera em sua copia logica<br/>e percorre seus lotes em sequencia"]
+    E2 --> F
+    E3 --> F
+    E4 --> F
+    E5 --> F
+    E6 --> F
+    E7 --> F
+    F --> G["Prompt do agente + excerpt do lote"]
+    G --> H["LLM gera comentarios candidatos"]
+    H --> I["Parser + revisor LLM opcional + heuristicas"]
+    I --> J["Resultado independente por agente"]
+    J --> K["Merge global dos resultados"]
+    K --> L["Validacao e deduplicacao final"]
+    L --> M["Coordenador monta a resposta final"]
+```
+
+Observacao: no fluxo principal atual, implementado em `src/editorial_docx/graph_chat.py`, os agentes operam de forma independente sobre a mesma preparacao do documento e podem executar em paralelo. A memoria progressiva continua local a cada agente, lote a lote, e o merge acontece apenas depois que todos terminam.
 
 ## Fluxo de referencias
 
@@ -161,6 +193,8 @@ flowchart LR
     J --> K
     K --> L["Heuristicas e validacao final"]
 ```
+
+Observacao: aqui as ramificacoes representam produtos derivados do matcher e do validador, nao execucao paralela. A construcao de `ReferencePipelineArtifact` tambem ocorre de forma sequencial em `src/editorial_docx/references/analysis.py`.
 
 ## Instalacao
 

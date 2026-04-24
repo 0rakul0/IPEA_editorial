@@ -1,11 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import json
 import inspect
 import hashlib
 import html
+from queue import Empty, Queue
 import re
+import threading
+import time
 import unicodedata
 from pathlib import Path
 from typing import Callable
@@ -147,6 +150,7 @@ for key, default in {
 
 
 def _build_rows() -> list[dict]:
+    """Handles build rows."""
     rows = []
     for comment_idx, c in enumerate(st.session_state.comments):
         ref = "sem referência"
@@ -172,6 +176,7 @@ def _build_rows() -> list[dict]:
 
 
 def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) -> list[AgentComment]:
+    """Handles merge comments."""
     merged: list[AgentComment] = []
     seen: set[tuple[str, str, int | None, str, str, str, bool, str]] = set()
 
@@ -194,6 +199,7 @@ def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) 
 
 
 def _signature(rows: list[dict]) -> str:
+    """Handles signature."""
     base = [
         (
             str(r["comment_idx"]),
@@ -212,6 +218,7 @@ def _signature(rows: list[dict]) -> str:
 
 
 def _ensure_correction_state(rows: list[dict]) -> None:
+    """Handles ensure correction state."""
     sig = _signature(rows)
     if st.session_state.comments_signature != sig:
         st.session_state.comments_signature = sig
@@ -232,6 +239,7 @@ def _ensure_correction_state(rows: list[dict]) -> None:
 
 
 def _build_correction_report(rows: list[dict]) -> list[dict]:
+    """Handles build correction report."""
     report = []
     for idx, row in enumerate(rows):
         state = st.session_state.correction_state.get(str(idx), {})
@@ -247,6 +255,7 @@ def _build_correction_report(rows: list[dict]) -> list[dict]:
 
 
 def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
+    """Handles build export comments."""
     overrides: dict[int, dict] = {int(row["comment_idx"]): row for row in report_rows}
     export_comments: list[AgentComment] = []
 
@@ -275,6 +284,7 @@ def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
 
 
 def _serialize_trace(trace: ExecutionTrace | None) -> dict[str, object]:
+    """Handles serialize trace."""
     if trace is None:
         return {"agents": []}
     return {
@@ -310,6 +320,7 @@ def _serialize_trace(trace: ExecutionTrace | None) -> dict[str, object]:
 
 
 def _serialize_verification(summary: VerificationSummary | None) -> dict[str, int]:
+    """Handles serialize verification."""
     if summary is None:
         return {"accepted_count": 0, "rejected_count": 0}
     return {
@@ -319,6 +330,7 @@ def _serialize_verification(summary: VerificationSummary | None) -> dict[str, in
 
 
 def _focus_area_from_comment(comment: AgentComment) -> str:
+    """Handles focus area from comment."""
     category = (comment.category or "").strip().lower()
     if comment.agent == "tipografia" and category in {
         "tipografia_titulo",
@@ -343,6 +355,7 @@ def _focus_area_from_comment(comment: AgentComment) -> str:
 
 
 def _join_focus_areas(items: list[str]) -> str:
+    """Handles join focus areas."""
     cleaned = [item for item in items if item]
     if not cleaned:
         return "ajustes editoriais diversos"
@@ -354,6 +367,7 @@ def _join_focus_areas(items: list[str]) -> str:
 
 
 def _build_diagnostic_headline(comments: list[AgentComment]) -> str:
+    """Handles build diagnostic headline."""
     if not comments:
         return "Nenhum problema editorial relevante foi encontrado na última execução."
 
@@ -367,6 +381,7 @@ def _build_diagnostic_headline(comments: list[AgentComment]) -> str:
 
 
 def _build_diagnostic_summary_text(answer: str, comments: list[AgentComment]) -> str:
+    """Handles build diagnostic summary text."""
     headline = _build_diagnostic_headline(comments)
     clean_answer = (answer or "").strip()
     if not clean_answer:
@@ -375,6 +390,7 @@ def _build_diagnostic_summary_text(answer: str, comments: list[AgentComment]) ->
 
 
 def _build_diagnostics_payload(export_comments: list[AgentComment]) -> dict[str, object]:
+    """Handles build diagnostics payload."""
     return {
         "source_name": st.session_state.source_name,
         "question": st.session_state.review_question,
@@ -390,6 +406,7 @@ def _build_diagnostics_payload(export_comments: list[AgentComment]) -> dict[str,
 
 
 def _persist_review_outputs(report_rows: list[dict], export_comments: list[AgentComment]) -> tuple[Path, str, Path | None, bytes | None]:
+    """Handles persist review outputs."""
     source_for_outputs = st.session_state.doc_path or st.session_state.normalized_json_path or (INPUT_DATA_DIR / st.session_state.source_name)
     output_paths = build_output_paths(Path(source_for_outputs), llm_model_tag)
 
@@ -413,11 +430,8 @@ def _persist_review_outputs(report_rows: list[dict], export_comments: list[Agent
     return report_json_path, report_json_text, docx_path, docx_bytes
 
 
-def _set_status_value(key: str, value: str) -> None:
-    st.session_state[key] = value
-
-
 def _select_comment_row(index: int, visible_indexes: list[int], option_labels: list[str]) -> None:
+    """Handles select comment row."""
     if not visible_indexes:
         st.session_state.selected_comment_row = 0
         return
@@ -432,6 +446,7 @@ def _find_next_pending_index(
     current_index: int,
     visible_indexes: list[int],
 ) -> int:
+    """Handles find next pending index."""
     pending_indexes = [
         idx
         for idx in visible_indexes
@@ -449,23 +464,8 @@ def _find_next_pending_index(
     return visible_indexes[-1] if visible_indexes else current_index
 
 
-def _apply_suggestion_and_advance(
-    rows: list[dict],
-    final_key: str,
-    final_value: str,
-    status_key: str,
-    current_index: int,
-    visible_indexes: list[int],
-    option_labels: list[str],
-) -> None:
-    st.session_state[final_key] = final_value
-    st.session_state[status_key] = "resolvido"
-    next_row_index = _find_next_pending_index(rows, current_index, visible_indexes)
-    next_visible_pos = visible_indexes.index(next_row_index) if next_row_index in visible_indexes else 0
-    _select_comment_row(next_visible_pos, visible_indexes, option_labels)
-
-
 def _normalize_text_with_mapping(text: str) -> tuple[str, list[int]]:
+    """Handles normalize text with mapping."""
     normalized_chars: list[str] = []
     mapping: list[int] = []
 
@@ -500,6 +500,7 @@ def _normalize_text_with_mapping(text: str) -> tuple[str, list[int]]:
 
 
 def _find_excerpt_span(text: str, target: str) -> tuple[int, int] | None:
+    """Handles find excerpt span."""
     if not text or not target:
         return None
 
@@ -541,6 +542,7 @@ def _find_excerpt_span(text: str, target: str) -> tuple[int, int] | None:
 
 
 def _render_target_excerpt(paragraph: str, issue_excerpt: str) -> None:
+    """Handles render target excerpt."""
     text = paragraph or ""
     target = (issue_excerpt or "").strip()
 
@@ -575,18 +577,23 @@ def _run_review(
     question: str,
     agents: list[str],
     on_progress: Callable[[str, int, int, int, int, str], None] | None = None,
+    event_queue=None,
 ) -> tuple[object, list[str]]:
+    """Handles run review."""
     logs: list[str] = []
     batch_statuses: dict[tuple[str, int], str] = {}
 
     def on_agent_done(agent: str, new_count: int, total: int) -> None:
+        """Handles the `on_agent_done` callback."""
         _ = (agent, new_count, total)
 
     def on_agent_batch_status(agent: str, batch_idx: int, batch_total: int, status: str) -> None:
+        """Handles the `on_agent_batch_status` callback."""
         _ = batch_total
         batch_statuses[(agent, batch_idx)] = status
 
     def on_agent_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int) -> None:
+        """Handles the `on_agent_progress` callback."""
         label = AGENT_LABELS.get(agent, agent)
         status = batch_statuses.get((agent, batch_idx), "")
         suffix = f" | {status}" if status and status not in {"json direto", "lista em `comments`"} else ""
@@ -597,6 +604,19 @@ def _run_review(
             )
         )
         logs.append(line)
+        if event_queue is not None:
+            event_queue.put(
+                {
+                    "type": "progress",
+                    "agent": agent,
+                    "batch_idx": batch_idx,
+                    "batch_total": batch_total,
+                    "new_count": new_count,
+                    "total": total,
+                    "status": status,
+                    "line": line,
+                }
+            )
         if on_progress is not None:
             on_progress(agent, batch_idx, batch_total, new_count, total, status)
 
@@ -623,6 +643,7 @@ def _run_review(
 
 
 def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: bytes = b"", doc_path: Path | None = None) -> None:
+    """Handles store loaded document."""
     st.session_state.messages = []
     st.session_state.comments = []
     st.session_state.agent_result_cache = {}
@@ -722,38 +743,155 @@ if st.session_state.pending_run and st.session_state.paragraphs:
     run = st.session_state.pending_run
     st.session_state.pending_run = None
     progress_header = st.empty()
-    progress_bar = st.progress(0, text="Iniciando revisão...")
+    progress_bar = st.progress(0, text="Preparando execução paralela...")
+    agent_progress_host = st.empty()
     progress_box = st.empty()
     progress_lines: list[str] = []
+    with agent_progress_host.container():
+        agent_slots = {agent: st.empty() for agent in run["agents"]}
+    agent_state = {
+        agent: {
+            "batch_idx": 0,
+            "batch_total": 0,
+            "new_count": 0,
+            "comments_total": 0,
+            "status": "aguardando",
+            "done": False,
+        }
+        for agent in run["agents"]
+    }
 
-    def _push_progress(agent: str, batch_idx: int, batch_total: int, new_count: int, total: int, status: str) -> None:
-        label = AGENT_LABELS.get(agent, agent)
-        pct = int((batch_idx / max(batch_total, 1)) * 100)
-        suffix = f" | {status}" if status and status not in {"json direto", "lista em `comments`"} else ""
+    def _render_parallel_progress() -> None:
+        """Handles render parallel progress."""
+        total_agents = max(len(run["agents"]), 1)
+        accumulated_ratio = 0.0
+        completed_agents = 0
+
+        for agent in run["agents"]:
+            state = agent_state[agent]
+            if state["done"]:
+                completed_agents += 1
+            if state["batch_total"] > 0:
+                accumulated_ratio += min(state["batch_idx"] / max(state["batch_total"], 1), 1.0)
+            elif state["done"]:
+                accumulated_ratio += 1.0
+
+            label = AGENT_LABELS.get(agent, agent)
+            if state["batch_total"] > 0:
+                pct = int(min(state["batch_idx"] / max(state["batch_total"], 1), 1.0) * 100)
+                subtitle = (
+                    f"Lote {state['batch_idx']}/{state['batch_total']} | "
+                    f"+{state['new_count']} comentário(s) | total local {state['comments_total']}"
+                )
+            else:
+                pct = 100 if state["done"] else 0
+                subtitle = f"Status: {state['status']}"
+
+            status = state["status"]
+            suffix = f" | {status}" if status else ""
+            with agent_slots[agent].container():
+                st.markdown(f"**{label}**")
+                st.progress(pct, text=f"{subtitle}{suffix}")
+
+        overall_pct = int((accumulated_ratio / total_agents) * 100)
         progress_header.info(
-            f"Processando: {label} | lote {batch_idx}/{batch_total} | +{new_count} comentário(s), total {total}{suffix}"
+            f"Executando revisão paralela: {completed_agents}/{total_agents} agente(s) concluído(s)."
         )
-        progress_bar.progress(pct, text=f"Progresso do documento: lote {batch_idx}/{batch_total}")
-        progress_lines.append(f"- `{label}` lote {batch_idx}/{batch_total}: +{new_count} comentário(s), total {total}{suffix}")
-        progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(progress_lines[-14:]))
+        progress_bar.progress(overall_pct, text=f"Progresso geral: {overall_pct}%")
+        if progress_lines:
+            progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(progress_lines[-14:]))
 
-    try:
-        with st.spinner("Executando agentes..."):
+    event_queue = Queue()
+    outcome: dict[str, object] = {"done": False}
+
+    def _review_worker() -> None:
+        """Handles review worker."""
+        try:
             result, logs = _run_review(
                 run["question"],
                 run["agents"],
-                on_progress=_push_progress,
+                event_queue=event_queue,
             )
+            outcome["result"] = result
+            outcome["logs"] = logs
+        except Exception as exc:  # pragma: no cover - surface in UI path
+            outcome["error"] = exc
+        finally:
+            outcome["done"] = True
+
+    worker = threading.Thread(target=_review_worker, name="streamlit-review", daemon=True)
+    worker.start()
+
+    try:
+        with st.spinner("Executando agentes em paralelo..."):
+            while worker.is_alive() or not event_queue.empty():
+                drained = False
+                while True:
+                    try:
+                        event = event_queue.get_nowait()
+                    except Empty:
+                        break
+
+                    drained = True
+                    if event.get("type") != "progress":
+                        continue
+                    agent = str(event["agent"])
+                    state = agent_state.setdefault(
+                        agent,
+                        {
+                            "batch_idx": 0,
+                            "batch_total": 0,
+                            "new_count": 0,
+                            "comments_total": 0,
+                            "status": "aguardando",
+                            "done": False,
+                        },
+                    )
+                    state["batch_idx"] = int(event["batch_idx"])
+                    state["batch_total"] = int(event["batch_total"])
+                    state["new_count"] = int(event["new_count"])
+                    state["comments_total"] += int(event["new_count"])
+                    state["status"] = str(event.get("status") or "em execução")
+                    state["done"] = state["batch_total"] > 0 and state["batch_idx"] >= state["batch_total"]
+                    progress_lines.append(str(event["line"]))
+                if drained:
+                    _render_parallel_progress()
+                time.sleep(0.05)
+            worker.join()
+            _render_parallel_progress()
+            if "error" in outcome:
+                raise outcome["error"]
+            result = outcome["result"]
+            logs = outcome.get("logs", [])
     except Exception as exc:
         progress_header.error("A revisão foi interrompida por uma falha inesperada.")
         progress_bar.empty()
+        agent_progress_host.empty()
         progress_box.empty()
         st.error(f"Falha ao executar a revisão: {exc}")
         st.caption("Verifique a configuração da LLM, especialmente provider, base URL e modelo.")
     else:
+        if getattr(result, "trace", None) is not None:
+            for agent_trace in result.trace.agents:
+                state = agent_state.setdefault(
+                    agent_trace.agent,
+                    {
+                        "batch_idx": 0,
+                        "batch_total": 0,
+                        "new_count": 0,
+                        "comments_total": 0,
+                        "status": "aguardando",
+                        "done": False,
+                    },
+                )
+                total_batches = len(agent_trace.batches)
+                state["batch_total"] = max(state["batch_total"], total_batches)
+                state["batch_idx"] = total_batches if total_batches else state["batch_idx"]
+                state["status"] = agent_trace.failure_status or "concluído"
+                state["done"] = True
+        _render_parallel_progress()
         progress_header.success("Revisão concluída.")
         progress_bar.progress(100, text="Processamento completo")
-        progress_box.empty()
 
         st.session_state.review_question = run["question"]
         st.session_state.review_answer = result.answer
