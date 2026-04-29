@@ -263,11 +263,16 @@ def _sync_correction_widget_state(rows: list[dict]) -> None:
         if key not in st.session_state.correction_state:
             continue
         note_key = f"review_note_{key}"
+        user_text = ""
         if note_key in st.session_state:
-            st.session_state.correction_state[key]["observacao"] = st.session_state[note_key]
+            user_text = st.session_state[note_key]
+            st.session_state.correction_state[key]["observacao"] = user_text
         final_text_key = f"final_text_{key}"
         if final_text_key in st.session_state:
             st.session_state.correction_state[key]["final_text"] = st.session_state[final_text_key]
+        if (user_text or "").strip() and st.session_state.correction_state[key].get("status") != "rejeitado":
+            st.session_state.correction_state[key]["final_text"] = user_text
+            st.session_state.correction_state[key]["status"] = "resolvido"
 
 
 def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
@@ -1072,17 +1077,20 @@ with col_comments:
                     if note_key not in st.session_state:
                         st.session_state[note_key] = state.get("observacao", "")
                     note = st.text_area(
-                        "Comentário do usuário",
+                        "Comentário/correção do usuário",
                         key=note_key,
-                        placeholder="Escreva uma observação, ajuste ou justificativa para este comentário.",
+                        placeholder="Escreva aqui a correção que deve ser aplicada no documento.",
                     )
                     state["observacao"] = note
+                    if note.strip() and state.get("status") != "rejeitado":
+                        state["final_text"] = note
+                        state["status"] = "resolvido"
 
                     action_accept, action_reject = st.columns(2)
                     with action_accept:
                         if st.button("Aceitar comentário", key=f"accept_comment_{state_key}", use_container_width=True):
                             state["status"] = "resolvido"
-                            state["final_text"] = final_text or row["como_deve_ficar"] or row["trecho_com_problema"] or ""
+                            state["final_text"] = note.strip() or final_text or row["como_deve_ficar"] or row["trecho_com_problema"] or ""
                             state["observacao"] = note
                             st.rerun()
                     with action_reject:
