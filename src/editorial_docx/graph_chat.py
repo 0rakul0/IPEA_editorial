@@ -31,7 +31,7 @@ from .pipeline.runtime import (
     _serialize_comments,
     _update_running_summary,
 )
-from .review_patterns import _folded_text
+from .review_patterns import _folded_text, _normalized_text
 from .pipeline.scope import _agent_scope_indexes, _consolidate_final_comments, prepare_review_batches
 from .pipeline.validation import (
     _build_batch_verification_candidates,

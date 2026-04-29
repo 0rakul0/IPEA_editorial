@@ -83,7 +83,7 @@ with st.sidebar:
 
     if st.button("Rodar todos os agentes", key="sidebar_run_all", use_container_width=True):
         st.session_state.pending_run = {
-            "question": "Faça uma revisão completa com todos os agentes ativos e liste ajustes prioritários.",
+            "question": "Faça uma revisão completa com todos os agentes ativos e liste ajustes.",
             "agents": AGENT_ORDER.copy(),
             "source": "control:all",
         }
@@ -91,7 +91,7 @@ with st.sidebar:
     st.markdown("#### Execução direta por agente")
     for agent in AGENT_ORDER:
         label = AGENT_LABELS.get(agent, agent)
-        if st.button(f"Rodar: {label}", key=f"sidebar_run_{agent}", use_container_width=True):
+        if st.button(label, key=f"sidebar_run_{agent}", use_container_width=True):
             st.session_state.pending_run = {
                 "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
                 "agents": [agent],
@@ -256,6 +256,20 @@ def _build_correction_report(rows: list[dict]) -> list[dict]:
     return report
 
 
+def _sync_correction_widget_state(rows: list[dict]) -> None:
+    """Syncs Streamlit widget values back into the correction state."""
+    for row in rows:
+        key = str(row["comment_idx"])
+        if key not in st.session_state.correction_state:
+            continue
+        note_key = f"review_note_{key}"
+        if note_key in st.session_state:
+            st.session_state.correction_state[key]["observacao"] = st.session_state[note_key]
+        final_text_key = f"final_text_{key}"
+        if final_text_key in st.session_state:
+            st.session_state.correction_state[key]["final_text"] = st.session_state[final_text_key]
+
+
 def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
     """Handles build export comments."""
     overrides: dict[int, dict] = {int(row["comment_idx"]): row for row in report_rows}
@@ -266,6 +280,8 @@ def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
         if override is None:
             export_comments.append(comment)
             continue
+        if override.get("status") == "rejeitado":
+            continue
 
         export_comments.append(
             AgentComment(
@@ -274,7 +290,7 @@ def _build_export_comments(report_rows: list[dict]) -> list[AgentComment]:
                 paragraph_index=override["indice_trecho"],
                 message=override["comentario"],
                 issue_excerpt=override["trecho_com_problema"],
-                suggested_fix=override["como_deve_ficar"],
+                suggested_fix=override.get("texto_final_aprovado") or override["como_deve_ficar"],
                 auto_apply=override.get("auto_aplicar", False),
                 format_spec=override.get("format_spec", ""),
                 review_status=override.get("status", ""),
@@ -738,42 +754,6 @@ elif uploaded_normalized is not None:
 
 col_diag, col_comments = st.columns([1.05, 1.35], gap="large")
 
-if st.session_state.normalized_json_text:
-    normalized_payload = json.loads(st.session_state.normalized_json_text)
-    metadata = normalized_payload.get("metadata") or {}
-    normalized_download_name = (
-        Path(st.session_state.normalized_json_path).name
-        if st.session_state.normalized_json_path is not None
-        else f"{st.session_state.source_name or 'documento'}_normalized_document.json"
-    )
-    with st.expander("Normalized Document", expanded=False):
-        meta_a, meta_b, meta_c, meta_d = st.columns(4)
-        meta_a.metric("Blocos", len(normalized_payload.get("blocks") or []))
-        meta_b.metric("Seções", len(normalized_payload.get("sections") or []))
-        meta_c.metric("Referências", len(normalized_payload.get("references") or []))
-        meta_d.metric("Comentários do usuário", len(normalized_payload.get("user_comments") or []))
-        st.caption(
-            f"Origem: `{metadata.get('input_path', '')}` | tipo: `{metadata.get('kind', '')}` | "
-            f"gerado em: `{metadata.get('generated_at', '')}`"
-        )
-        if st.session_state.normalized_json_path:
-            st.caption(f"JSON carregado: `{st.session_state.normalized_json_path}`")
-        else:
-            st.caption("O normalized está em memória e só vira arquivo se você solicitar explicitamente.")
-        st.download_button(
-            label="Baixar normalized_document.json",
-            data=st.session_state.normalized_json_text,
-            file_name=normalized_download_name,
-            mime="application/json",
-        )
-        st.json(
-            {
-                "metadata": metadata,
-                "toc": normalized_payload.get("toc") or [],
-            },
-            expanded=False,
-        )
-
 if st.session_state.pending_run and st.session_state.paragraphs:
     run = st.session_state.pending_run
     st.session_state.pending_run = None
@@ -969,6 +949,7 @@ docx_bytes = None
 
 if rows:
     _ensure_correction_state(rows)
+    _sync_correction_widget_state(rows)
     report = _build_correction_report(rows)
     export_comments = _build_export_comments(report)
     report_json_path, report_json_text, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
@@ -989,30 +970,7 @@ with col_diag:
     elif not st.session_state.comments:
         st.info("Documento carregado. Rode os agentes na barra lateral para gerar o diagnóstico editorial.")
     else:
-        metric_a, metric_b, metric_c = st.columns(3)
-        verification = st.session_state.review_verification
-        trace = st.session_state.review_trace
-        metric_a.metric("Comentários visíveis", len(st.session_state.comments))
-        metric_b.metric("Aceitos", verification.accepted_count if verification else 0)
-        metric_c.metric("Rejeitados", verification.rejected_count if verification else 0)
-
-        if trace is not None:
-            failed_agents = [agent for agent in trace.agents if agent.failed]
-            st.caption(
-                "Agentes com saída: "
-                f"{sum(1 for agent in trace.agents if agent.llm_raw_comment_count or agent.heuristic_accepted_comment_count)}"
-                + (f" | Falhas: {len(failed_agents)}" if failed_agents else " | Falhas: 0")
-            )
-
-        st.markdown(_build_diagnostic_summary_text(st.session_state.review_answer, st.session_state.comments))
-
-        if report_json_path:
-            st.markdown(
-                f"O relatório completo foi salvo em `{report_json_path}`."
-            )
-
-        if st.session_state.review_question:
-            st.caption(f"Instrução da última execução: `{st.session_state.review_question}`")
+        st.metric("Comentários gerados", len(st.session_state.comments))
 
         if docx_path and docx_bytes is not None:
             st.download_button(
@@ -1031,19 +989,6 @@ with col_diag:
                 mime="application/json",
                 use_container_width=True,
             )
-
-        if diagnostics_json_text and diagnostics_json_name:
-            st.download_button(
-                label="Baixar diagnostics JSON",
-                data=diagnostics_json_text,
-                file_name=diagnostics_json_name,
-                mime="application/json",
-                use_container_width=True,
-            )
-
-        if st.session_state.review_logs:
-            with st.expander("Progresso da execução", expanded=False):
-                st.markdown("\n".join(st.session_state.review_logs))
 
 with col_comments:
     st.subheader("Erros Encontrados")
@@ -1090,12 +1035,62 @@ with col_comments:
                     + (f" | trecho {row['indice_trecho']}" if isinstance(row["indice_trecho"], int) else "")
                 )
                 with st.expander(title, expanded=False):
+                    state_key = str(row["comment_idx"])
+                    state = st.session_state.correction_state.setdefault(
+                        state_key,
+                        {
+                            "status": "pendente",
+                            "final_text": row["como_deve_ficar"] or row["trecho_com_problema"] or "",
+                            "observacao": "",
+                        },
+                    )
+                    status_label = {
+                        "pendente": "Pendente",
+                        "resolvido": "Aceito",
+                        "rejeitado": "Rejeitado",
+                    }.get(state.get("status", "pendente"), state.get("status", "pendente"))
+                    st.caption(f"Status: {status_label}")
+
                     st.markdown(f"**Referência:** {row['referencia']}")
                     st.markdown(f"**Comentário:** {row['comentario']}")
                     st.markdown("**Trecho com problema**")
                     st.code(row["trecho_com_problema"] or "(não informado)", language="text")
                     st.markdown("**Sugestão de correção**")
                     st.code(row["como_deve_ficar"] or "(não informado)", language="text")
+
+                    final_text_key = f"final_text_{state_key}"
+                    if final_text_key not in st.session_state:
+                        st.session_state[final_text_key] = state.get("final_text", "")
+                    final_text = st.text_area(
+                        "Correção que irá para o documento",
+                        key=final_text_key,
+                        placeholder="Edite aqui o texto final a aplicar no documento.",
+                    )
+                    state["final_text"] = final_text
+
+                    note_key = f"review_note_{state_key}"
+                    if note_key not in st.session_state:
+                        st.session_state[note_key] = state.get("observacao", "")
+                    note = st.text_area(
+                        "Comentário do usuário",
+                        key=note_key,
+                        placeholder="Escreva uma observação, ajuste ou justificativa para este comentário.",
+                    )
+                    state["observacao"] = note
+
+                    action_accept, action_reject = st.columns(2)
+                    with action_accept:
+                        if st.button("Aceitar comentário", key=f"accept_comment_{state_key}", use_container_width=True):
+                            state["status"] = "resolvido"
+                            state["final_text"] = final_text or row["como_deve_ficar"] or row["trecho_com_problema"] or ""
+                            state["observacao"] = note
+                            st.rerun()
+                    with action_reject:
+                        if st.button("Rejeitar comentário", key=f"reject_comment_{state_key}", use_container_width=True):
+                            state["status"] = "rejeitado"
+                            state["final_text"] = ""
+                            state["observacao"] = note
+                            st.rerun()
 
                     pidx = row["indice_trecho"]
                     if isinstance(pidx, int) and 0 <= pidx < len(st.session_state.paragraphs):

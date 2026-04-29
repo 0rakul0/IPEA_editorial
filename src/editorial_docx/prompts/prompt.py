@@ -304,7 +304,8 @@ def build_coordinator_prompt(profile_key: str | None = None) -> ChatPromptTempla
                     "Pergunta do usuário: {question}\n\n"
                     "Trecho do documento:\n{document_excerpt}\n\n"
                     "Comentários dos agentes (JSON):\n{comments_json}\n\n"
-                    "Responda em português, de forma direta, e cite os principais pontos."
+                    "Responda em português, de forma direta, e cite os principais pontos. "
+                    "Quando listar achados, use uma única seção chamada `Ajustes`; não crie subdivisões por nível de impacto."
                 ),
             ),
         ]

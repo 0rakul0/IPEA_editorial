@@ -1296,6 +1296,46 @@ def _insert_auto_references(
         anchor.addnext(_new_paragraph_like(anchor, suggested_fix))
 
 
+def _apply_approved_text_replacements(
+    paragraphs: list[etree._Element],
+    non_empty_indexes: list[int],
+    comments: list[AgentComment],
+) -> set[int]:
+    """Applies user-approved text edits directly to document paragraphs."""
+    applied_indexes: set[int] = set()
+
+    for item_idx, item in enumerate(comments):
+        if item.review_status != "resolvido":
+            continue
+        approved_text = (item.approved_text or "").strip()
+        if not approved_text:
+            continue
+
+        paragraph_index = _resolve_docx_paragraph_index(item, non_empty_indexes)
+        if paragraph_index is None or paragraph_index < 0 or paragraph_index >= len(paragraphs):
+            continue
+
+        paragraph = paragraphs[paragraph_index]
+        original_text = _paragraph_text(paragraph)
+        if not original_text.strip():
+            continue
+
+        issue_excerpt = (item.issue_excerpt or "").strip()
+        if issue_excerpt:
+            span = _find_excerpt_span(original_text, issue_excerpt)
+            if span is None:
+                continue
+            new_text = original_text[: span[0]] + approved_text + original_text[span[1] :]
+        else:
+            new_text = approved_text
+
+        if new_text != original_text:
+            _replace_paragraph_text(paragraph, new_text)
+            applied_indexes.add(item_idx)
+
+    return applied_indexes
+
+
 def _resolve_docx_paragraph_index(item: AgentComment, non_empty_indexes: list[int]) -> int | None:
     """Handles resolve docx paragraph index."""
     paragraph_index = item.paragraph_index
@@ -1383,7 +1423,12 @@ def apply_comments_to_docx(input_path: Path, comments: list[AgentComment]) -> by
     non_empty_indexes = [i for i, p in enumerate(paragraphs) if _paragraph_text(p).strip()]
     _apply_auto_formatting(paragraphs, non_empty_indexes, comments)
     _insert_auto_references(paragraphs, non_empty_indexes, comments)
-    visible_comments = comments[:]
+    applied_comment_indexes = _apply_approved_text_replacements(paragraphs, non_empty_indexes, comments)
+    visible_comments = [
+        item
+        for item_idx, item in enumerate(comments)
+        if item.review_status != "rejeitado" and item_idx not in applied_comment_indexes
+    ]
 
     grouped_comments: dict[int, list[AgentComment]] = {}
     for item in visible_comments:

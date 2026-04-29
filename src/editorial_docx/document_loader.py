@@ -50,7 +50,7 @@ def _is_heading(text: str) -> bool:
             if upper_ratio >= 0.75:
                 return True
 
-    explicit = {"SINOPSE", "ABSTRACT", "REFERÊNCIAS", "INTRODUÇÃO", "APÊNDICE"}
+    explicit = {"SINOPSE", "ABSTRACT", "REFERÊNCIAS", "INTRODUÇÃO", "APÊNDICE", "RESUMO"}
     if t.upper() in explicit:
         return True
 

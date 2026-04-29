@@ -46,7 +46,7 @@ def run_benchmark_document(input_path: Path, output_dir: Path) -> BenchmarkRunRe
         paragraphs=loaded.chunks,
         refs=loaded.refs,
         sections=loaded.sections,
-        question="Faça uma revisão completa com todos os agentes ativos e liste ajustes prioritários.",
+        question="Faça uma revisão completa com todos os agentes ativos e liste ajustes.",
         selected_agents=AGENT_ORDER.copy(),
         user_comments=loaded.user_comments,
     )
