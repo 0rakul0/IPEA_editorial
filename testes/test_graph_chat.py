@@ -5,6 +5,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import sys
 import json
 from lxml import etree
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -39,9 +40,8 @@ from editorial_docx.user_comment_refs import build_reference_search_requests
 
 _SAMPLE_DOCX_CANDIDATES = [
     Path(__file__).resolve().parent / "234362_TD_3125_Benefícios coletivos (53 laudas).docx",
-    Path(__file__).resolve().parents[1] / "input_data" / "234362_TD_3125_Benefícios coletivos (53 laudas).docx",
 ]
-SAMPLE_DOCX = next(path for path in _SAMPLE_DOCX_CANDIDATES if path.exists())
+SAMPLE_DOCX = next((path for path in _SAMPLE_DOCX_CANDIDATES if path.exists()), None)
 
 
 def test_parse_comments_accepts_json_fenced_block():
@@ -1447,6 +1447,9 @@ def test_extract_paragraphs_with_metadata_keeps_long_body_text_as_paragraph(tmp_
 
 
 def test_extract_paragraphs_with_metadata_recognizes_scientific_front_matter_and_references():
+    if SAMPLE_DOCX is None:
+        pytest.skip("Documento de amostra local nao encontrado.")
+
     items = extract_paragraphs_with_metadata(SAMPLE_DOCX)
 
     assert items[1].block_type == "title"
