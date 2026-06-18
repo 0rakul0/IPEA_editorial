@@ -21,6 +21,7 @@ from editorial_docx.graph_chat import (
     _agent_scope_indexes,
     _connection_error_summary,
     _heuristic_reference_comments,
+    _heuristic_reference_global_comments,
     _invoke_with_retry,
     _is_connection_error,
     _normalize_batch_comments,
@@ -30,8 +31,11 @@ from editorial_docx.graph_chat import (
     _verify_batch_comments,
     run_conversation,
 )
+from editorial_docx.agents.heuristics.structure import heuristic_structure_comments
+from editorial_docx.agents.heuristics.tables_figures import heuristic_table_figure_comments
 from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, VerificationDecision, VerificationSummary, agent_short_label
 from editorial_docx.pipeline.scope import _consolidate_final_comments
+from editorial_docx.prompts import detect_prompt_profile
 from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, build_agent_prompt, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
 from editorial_docx.pipeline.runtime import LLMConnectionFailure, build_coordinator_answer
@@ -82,6 +86,26 @@ def test_parse_comments_accepts_wrapped_comments_key():
     assert len(comments) == 1
     assert comments[0].message == "Ajustar concordância"
     assert comments[0].paragraph_index == 2
+
+
+def test_parse_comments_preserves_action_type():
+    raw = """
+    [
+      {
+        "category": "referencias",
+        "message": "Favor confirmar a autoria da obra citada.",
+        "paragraph_index": 3,
+        "issue_excerpt": "Ferreira (2020)",
+        "suggested_fix": "Confirmar se a autoria correta é Ferreira et al. (2020).",
+        "action_type": "author_confirmation"
+      }
+    ]
+    """
+
+    comments = _parse_comments(raw, agent="referencias")
+
+    assert len(comments) == 1
+    assert comments[0].action_type == "author_confirmation"
 
 
 def test_parse_comments_recovers_json_with_prose_and_trailing_commas():
@@ -232,6 +256,15 @@ def test_parse_comments_ignores_tipografia_auto_apply_fields():
     assert len(comments) == 1
     assert comments[0].auto_apply is False
     assert "font=Times New Roman" in comments[0].format_spec
+
+
+def test_detect_prompt_profile_supports_new_document_variants():
+    assert detect_prompt_profile("236012_Revista_PPP-71-art.-1.docx").key == "PPP"
+    assert detect_prompt_profile("235950_PPE_Volume-55-n.2-art.-3.docx").key == "PPE"
+    assert detect_prompt_profile("226463_Boletim_BPS-31-Saude.docx").key == "BPS"
+    assert detect_prompt_profile("235784_Boletim_BMT-80-ES-1.docx").key == "BMT"
+    assert detect_prompt_profile("238861_Boletim_Radar-81-art.-1.docx").key == "RADAR"
+    assert detect_prompt_profile("224238_Livro_Dinamicas-da-Violencia-cap.-1.docx").key == "CAPITULO_LIVRO"
 
 
 def test_parse_comment_reviews_accepts_valid_json():
@@ -1499,6 +1532,7 @@ def test_heuristic_reference_comments_flags_missing_access_date():
 
     assert any(item.message == "A referência online informa a URL, mas não traz `Acesso em:` ao final." for item in comments)
     assert any(item.suggested_fix == "Inserir `Acesso em:` com a data de consulta após a URL." for item in comments)
+    assert any(item.action_type == "auto_fix_candidate" for item in comments)
 
 
 def test_heuristic_reference_comments_flags_duplicated_place_and_publisher():
@@ -1510,6 +1544,22 @@ def test_heuristic_reference_comments_flags_duplicated_place_and_publisher():
 
     assert any(item.message == "Há duplicação de local e editora no trecho final da referência." for item in comments)
     assert any(item.issue_excerpt == "Rio de Janeiro: Rio de Janeiro, 2009" for item in comments)
+
+
+def test_heuristic_reference_global_comments_marks_missing_reference_as_production_request():
+    chunks = [
+        "Conforme Silva (2022), houve mudança importante.",
+        "Referências",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=paragraph",
+        "parágrafo 2 | tipo=reference_heading",
+    ]
+
+    comments = _heuristic_reference_global_comments(chunks, refs, batch_indexes=[0, 1])
+
+    target = next(item for item in comments if item.category == "citation_match")
+    assert target.action_type == "production_request"
 
 
 def test_typography_prompt_support_context_loads_local_norms():
@@ -2203,6 +2253,19 @@ def test_normalize_batch_comments_rejects_unsafe_structure_auto_apply():
 
     assert len(normalized) == 1
     assert normalized[0].auto_apply is False
+
+
+def test_heuristic_structure_numbering_is_not_auto_applied():
+    comments = heuristic_structure_comments(
+        batch_indexes=[0, 1],
+        chunks=["1 INTRODUÇÃO", "METODOLOGIA"],
+        refs=["parágrafo 1 | tipo=heading | numerado=sim", "parágrafo 2 | tipo=heading"],
+    )
+
+    assert len(comments) == 1
+    assert comments[0].action_type == "author_confirmation"
+    assert comments[0].auto_apply is False
+    assert comments[0].suggested_fix == "2 METODOLOGIA"
 
 
 def test_normalize_batch_comments_accepts_safe_reference_auto_apply():
@@ -3362,6 +3425,73 @@ def test_normalize_batch_comments_discards_font_only_typography_instruction():
     assert normalized == []
 
 
+def test_heuristic_table_figure_comments_classifies_missing_source_as_production_request():
+    comments = heuristic_table_figure_comments(
+        batch_indexes=[0, 1],
+        chunks=["Tabela 2: Evolução do emprego", "Linha de dados"],
+        refs=["parágrafo 1 | tipo=caption", "parágrafo 2 | tipo=table_cell"],
+    )
+
+    source_comment = next(item for item in comments if item.category == "Fonte")
+    assert source_comment.action_type == "production_request"
+
+
+def test_heuristic_table_figure_comments_flags_textual_table_as_quadro_request():
+    comments = heuristic_table_figure_comments(
+        batch_indexes=[0, 1, 2, 3],
+        chunks=[
+            "Tabela 3: Etapas da implementação",
+            "Etapa",
+            "Descrição detalhada",
+            "Responsável institucional",
+        ],
+        refs=[
+            "parágrafo 1 | tipo=caption",
+            "parágrafo 2 | tipo=table_cell",
+            "parágrafo 3 | tipo=table_cell",
+            "parágrafo 4 | tipo=table_cell",
+        ],
+    )
+
+    assert any(item.action_type == "production_request" and "quadro" in (item.message or "").casefold() for item in comments)
+
+
+def test_heuristic_reference_comments_flags_dataset_reference_for_editorial_scope():
+    comments = _heuristic_reference_comments(
+        batch_indexes=[0],
+        chunks=["IBGE. Microdados da Pnad Contínua. Disponível em: https://www.ibge.gov.br/estatisticas/downloads-estatisticas.html."],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert any(item.action_type == "production_request" and "nota de rodapé" in (item.suggested_fix or "").casefold() for item in comments)
+
+
+def test_normalize_batch_comments_discards_structure_production_request_outside_heading():
+    comments = [
+        AgentComment(
+            agent="estrutura",
+            category="estrutura",
+            message="Favor informar os créditos institucionais do autor.",
+            paragraph_index=0,
+            issue_excerpt="Nome do autor",
+            suggested_fix="Informar cargo, vínculo e e-mail.",
+            action_type="production_request",
+        )
+    ]
+    chunks = ["Nome do autor"]
+    refs = ["parágrafo 1 | tipo=paragraph"]
+
+    normalized = _normalize_batch_comments(
+        comments,
+        agent="estrutura",
+        batch_indexes=[0],
+        chunks=chunks,
+        refs=refs,
+    )
+
+    assert normalized == []
+
+
 def test_normalize_batch_comments_discards_references_missing_field_guess():
     comments = [
         AgentComment(
@@ -3753,8 +3883,8 @@ def test_normalize_batch_comments_adds_structure_numbering_for_consideracoes_fin
         ],
     )
 
-    assert any(item.issue_excerpt == "Considerações finais" and item.suggested_fix == "5. Considerações finais" for item in normalized)
-    assert any(item.issue_excerpt == "Referências" and item.suggested_fix == "6. Referências" for item in normalized)
+    assert any(item.issue_excerpt == "Considerações finais" and item.suggested_fix == "5 Considerações finais" for item in normalized)
+    assert any(item.issue_excerpt == "Referências" and item.suggested_fix == "6 Referências" for item in normalized)
 
 
 def test_normalize_batch_comments_does_not_add_structure_numbering_when_intro_is_not_numbered():
@@ -3791,8 +3921,8 @@ def test_normalize_batch_comments_adds_structure_numbering_when_top_level_headin
         ],
     )
 
-    assert any(item.issue_excerpt == "Introdução" and item.suggested_fix == "1. Introdução" for item in normalized)
-    assert any(item.issue_excerpt == "Classificação dos benefícios coletivos" and item.suggested_fix == "2. Classificação dos benefícios coletivos" for item in normalized)
+    assert any(item.issue_excerpt == "Introdução" and item.suggested_fix == "1 Introdução" for item in normalized)
+    assert any(item.issue_excerpt == "Classificação dos benefícios coletivos" and item.suggested_fix == "2 Classificação dos benefícios coletivos" for item in normalized)
 
 
 def test_sinopse_abstract_td_prompt_requires_jel_after_pt_and_en_blocks():

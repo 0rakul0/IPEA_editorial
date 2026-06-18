@@ -9,7 +9,7 @@ from .document_loader import load_document
 from .gold_metrics import compute_gold_metrics
 from .graph_chat import run_conversation
 from .llm import get_llm_model_tag
-from .prompts import AGENT_ORDER
+from .prompts import AGENT_ORDER, detect_prompt_profile
 
 
 @dataclass(slots=True)
@@ -49,6 +49,7 @@ def run_benchmark_document(input_path: Path, output_dir: Path) -> BenchmarkRunRe
         question="Faça uma revisão completa com todos os agentes ativos e liste ajustes.",
         selected_agents=AGENT_ORDER.copy(),
         user_comments=loaded.user_comments,
+        profile_key=detect_prompt_profile(input_path.name).key,
     )
     report_path = output_dir / f"{base_name}_output_{model_tag}.relatorio.json"
     report_path.write_text(
@@ -61,6 +62,7 @@ def run_benchmark_document(input_path: Path, output_dir: Path) -> BenchmarkRunRe
                     "paragraph_index": item.paragraph_index,
                     "issue_excerpt": item.issue_excerpt,
                     "suggested_fix": item.suggested_fix,
+                    "action_type": item.action_type,
                 }
                 for item in result.comments
             ],

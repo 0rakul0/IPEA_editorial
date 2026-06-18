@@ -451,6 +451,7 @@ def _serialize_comments(comments: list[AgentComment]) -> str:
                 "paragraph_index": item.paragraph_index,
                 "issue_excerpt": item.issue_excerpt,
                 "suggested_fix": item.suggested_fix,
+                "action_type": item.action_type,
                 "auto_apply": item.auto_apply,
                 "format_spec": item.format_spec,
             }
@@ -598,6 +599,7 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
                 paragraph_index = int(paragraph_index)
             else:
                 paragraph_index = None
+            action_type = str(entry.get("action_type") or "").strip()
             auto_apply = bool(entry.get("auto_apply")) if agent in {"estrutura", "tabelas_figuras", "referencias"} else False
             format_spec = str(entry.get("format_spec") or "").strip() if auto_apply or agent == "tipografia" else str(entry.get("format_spec") or "").strip()
             comments.append(
@@ -608,6 +610,7 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
                     paragraph_index=paragraph_index,
                     issue_excerpt=str(entry.get("issue_excerpt") or "").strip(),
                     suggested_fix=str(entry.get("suggested_fix") or "").strip(),
+                    action_type=action_type,
                     auto_apply=auto_apply,
                     format_spec=format_spec,
                 )
@@ -743,6 +746,7 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
                     paragraph_index = int(paragraph_index)
                 else:
                     paragraph_index = None
+                action_type = str(entry.get("action_type") or "").strip()
                 auto_apply = bool(entry.get("auto_apply")) if agent in {"estrutura", "tabelas_figuras", "referencias"} else False
                 format_spec = str(entry.get("format_spec") or "").strip() if auto_apply or agent == "tipografia" else str(entry.get("format_spec") or "").strip()
                 comments.append(
@@ -753,6 +757,7 @@ def _parse_comments_with_status(raw: str, agent: str) -> tuple[list[AgentComment
                         paragraph_index=paragraph_index,
                         issue_excerpt=str(entry.get("issue_excerpt") or "").strip(),
                         suggested_fix=str(entry.get("suggested_fix") or "").strip(),
+                        action_type=action_type,
                         auto_apply=auto_apply,
                         format_spec=format_spec,
                     )
@@ -831,7 +836,7 @@ def _parse_comment_reviews(raw: str) -> tuple[list[dict[str, object]], str]:
     return [], "sem revisoes validas"
 
 
-def build_coordinator_answer(question: str, comments: list[AgentComment]) -> str:
+def build_coordinator_answer(question: str, comments: list[AgentComment], profile_key: str | None = None) -> str:
     """Builds coordinator answer."""
     if get_chat_model() is None:
         if comments:
@@ -839,7 +844,7 @@ def build_coordinator_answer(question: str, comments: list[AgentComment]) -> str
             return "Resumo dos agentes:\n" + points
         return "Nenhum comentário relevante foi identificado pelos agentes."
 
-    prompt = build_coordinator_prompt()
+    prompt = build_coordinator_prompt(profile_key=profile_key)
     payload = {
         "question": _sanitize_for_llm(question),
         "document_excerpt": _sanitize_for_llm(_build_coordinator_document_excerpt(comments)),

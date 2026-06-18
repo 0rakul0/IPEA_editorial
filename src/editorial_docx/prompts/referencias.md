@@ -78,6 +78,9 @@ Se o tipo documental for objetivamente identificável pelo próprio trecho, voc�
 - duplicação indevida de local/editora
 - quando houver referência correspondente com mesmo autor, mas ano diferente, classificar como divergência de ano; não dizer que está ausente
 - referências coladas
+- citação direta sem página, quando o próprio trecho mostrar a citação e a referência associada
+- divergência explícita entre autoria/ano no corpo e na lista quando o mesmo contexto trouxer as duas formas
+- casos em que link de base de dados ou portal institucional não deve permanecer como referência final, mas pode precisar migrar para nota
 
 ---
 
@@ -100,6 +103,19 @@ Se o tipo documental for objetivamente identificável pelo próprio trecho, voc�
 - Não tratar como erro simples variação de caixa, abreviação de prenome ou estilo de autoria se a forma puder ser apenas outro padrão aceitável
 - Não usar comparação com "as demais referências" para justificar correção de autoria, caixa ou completude sem evidência local inequívoca
 - Se não for possível validar com segurança -> retornar []
+
+## COMPORTAMENTO APRENDIDO COM REVISÕES HUMANAS
+
+- usar `action_type=auto_fix_candidate` quando a correção for local e segura, como pontuação, separador, `In:`, paginação, espaço após abreviatura, referência colada ou pequeno ajuste formal objetivo;
+- usar `action_type=production_request` quando faltar dado bibliográfico, página de citação direta, link específico, data de acesso, identificação do tipo documental ou outro elemento que não possa ser inventado;
+- usar `action_type=author_confirmation` quando houver conflito entre ano, autoria, remissiva e lista final, ou quando a revisão puder estar trocando uma obra por outra com base apenas em indício local;
+- quando houver base de dados, portal institucional ou link que, por regra editorial, não deva compor a seção Referências, você pode sugerir a retirada da lista final e o encaminhamento do acesso para nota de rodapé, mas sem inventar o texto completo da nota;
+- quando o item parecer remeter a base, painel, microdados ou portal de consulta, priorizar pedido editorial curto sobre o destino correto do link e da entrada, em vez de tentar completar artificialmente uma referência;
+- quando o link indicado parecer ser apenas porta de entrada, homepage ou acesso genérico, trate o caso como necessidade de confirmação/complementação editorial, não como referência completa já resolvida;
+- quando houver menção a fonte de dados de tabela, figura ou gráfico dentro da seção Referências, comentar de forma específica se aquilo parece publicação formal ou apenas base de consulta;
+- quando localizar somente uma obra parecida na lista, mas com autoria/ano divergentes, tratar como verificação de coerência e não como ausência automática da referência;
+- quando a publicação for citada no corpo sem dados completos para entrada bibliográfica, formular o pedido de complementação de modo específico e curto;
+- se o ajuste alterar o ano de uma obra ou a autoria citada, explicitar que a proposta depende de confirmação do autor.
 
 ---
 
@@ -245,6 +261,9 @@ Se o tipo documental estiver claro no próprio trecho, você pode apontar ausên
 - duplicação indevida de local/editora
 - referência colada com a seguinte
 - coerência global entre citações no corpo e a lista de referências
+- citação direta sem número de página quando o próprio trecho mostrar a citação e a entrada correspondente
+- conflitos explícitos de autoria/ano entre remissiva e referência no mesmo contexto
+- casos em que o link deve sair da seção Referências e migrar para nota por regra editorial
 
 ---
 
@@ -264,6 +283,18 @@ Se o tipo documental estiver claro no próprio trecho, você pode apontar ausên
 - Não cobrar volume, número, editora, local, data, DOI ou outros elementos ausentes apenas porque seriam comuns ao tipo documental; só comentar quando a ausência for objetivamente dedutível pelo trecho
 - Não tratar como erro simples variação de caixa, abreviação de prenome ou estilo de autoria se a forma puder ser apenas outro padrão aceitável
 - Não usar comparação com "as demais referências" para justificar correção de autoria, caixa ou completude sem evidência local inequívoca
+
+## COMPORTAMENTO APRENDIDO COM REVISÕES HUMANAS
+
+- usar `action_type=auto_fix_candidate` para pontuação, `In:`, paginação, separadores, pequenos ajustes formais e casos locais de referência colada;
+- usar `action_type=production_request` quando faltarem dados bibliográficos, página de citação direta, data de acesso, link específico ou informação necessária para completar a referência sem invenção;
+- usar `action_type=author_confirmation` quando houver possível troca de obra, divergência de ano, conflito de autoria, ambiguidade entre obra citada e obra listada ou interpretação editorial que dependa da intenção do autor;
+- em casos de microdados, painéis, bases administrativas e portais públicos, considere recorrente a solução editorial de remover a entrada da lista final e deslocar o link de acesso para nota de rodapé;
+- se o endereço fornecido aparentar ser genérico demais para sustentar uma referência completa, peça complemento objetivo ou validação editorial do destino correto do link;
+- em TD e publicações semelhantes do Ipea, considerar recorrente a retirada de links de bases de dados da seção Referências, com migração para nota de rodapé quando o acesso precisar ser preservado;
+- quando o link informado levar apenas ao portal geral e não ao conteúdo citado, tratar isso como pendência editorial específica;
+- quando a revisão localizar apenas uma obra parecida na lista final, mas não idêntica à remissiva do corpo, pedir verificação objetiva em vez de declarar ausência;
+- quando se tratar de citação direta, solicitar o número da página se ele não estiver disponível no trecho.
 
 ---
 

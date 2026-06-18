@@ -77,4 +77,28 @@ def rejection_reason(ctx: ValidationContext) -> str | None:
         return "descartado por regra de verificação"
     if comment.auto_apply and not is_safe_text_normalization_auto_apply(comment, ctx.chunks):
         return "descartado por regra de verificação"
+    if comment.action_type == "production_request":
+        if not any(
+            token in table_blob_folded
+            for token in {
+                "fonte",
+                "elaboracao",
+                "elaboração",
+                "titulo",
+                "título",
+                "nota",
+                "unidade",
+                "versao editavel",
+                "versão editável",
+                "quadro",
+                "tabela",
+            }
+        ):
+            return "descartado por regra de verificação"
+    if comment.action_type == "author_confirmation":
+        if not any(
+            token in table_blob_folded
+            for token in {"confirm", "valid", "sentido", "sigla", "pertinencia", "pertinência", "interpret"}
+        ):
+            return "descartado por regra de verificação"
     return None

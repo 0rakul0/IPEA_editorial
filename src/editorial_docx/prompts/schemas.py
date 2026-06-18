@@ -14,6 +14,7 @@ class AgentCommentPayload(BaseModel):
     paragraph_index: int | None = None
     issue_excerpt: str = ""
     suggested_fix: str = ""
+    action_type: Literal["auto_fix_candidate", "author_confirmation", "production_request"] | None = None
     format_spec: str = ""
 
 
@@ -51,6 +52,9 @@ def agent_output_contract_text() -> str:
         "Se não houver achados no trecho analisado, responda com uma lista vazia: []. "
         "Em cada item, use `message` para explicar de forma natural e objetiva o que está errado ou faltando no trecho. "
         "Use `suggested_fix` para trazer a correção exata do fragmento ou uma instrução curta e concreta de ajuste. "
+        "Use `action_type` para classificar a intervenção: `auto_fix_candidate` quando o ajuste for local e seguro; "
+        "`author_confirmation` quando a revisão depender de validação de sentido, data, sigla, autoria ou formulação técnica; "
+        "`production_request` quando faltar elemento editorial, como fonte, crédito, título, numeração, metadado ou dado bibliográfico. "
         "Se `suggested_fix` já trouxer a correção, mantenha `message` em no máximo uma frase curta e nunca mencione hipóteses descartadas ou diga que 'não há ajuste necessário'. "
         "Evite mensagens genéricas como `ajustar trecho` ou `corrigir problema`. "
         "Siga este JSON Schema: "

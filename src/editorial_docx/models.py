@@ -29,6 +29,7 @@ class AgentComment:
     paragraph_index: int | None = None
     issue_excerpt: str = ""
     suggested_fix: str = ""
+    action_type: str = ""
     auto_apply: bool = False
     format_spec: str = ""
     review_status: str = ""

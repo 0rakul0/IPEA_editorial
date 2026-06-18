@@ -97,4 +97,35 @@ def rejection_reason(ctx: ValidationContext) -> str | None:
             return "descartado por regra de verificação"
         if re.search(r"\b(19|20)\d{2}\b", current) and "alterar o ano" in _normalized_text(comment.suggested_fix):
             return "descartado por regra de verificação"
+    if comment.action_type == "production_request":
+        if any(token in message_blob for token in {"incluir ou revisar a referência correspondente", "verificar estas obras"}):
+            return None
+        if not any(
+            token in message_blob
+            for token in {
+                "dados bibliograficos",
+                "dados bibliográficos",
+                "link",
+                "data de acesso",
+                "pagina",
+                "página",
+                "completar a referencia",
+                "completar a referência",
+                "incluir ou revisar a referencia",
+                "incluir ou revisar a referência",
+                "verificar estas obras",
+                "base de dados",
+                "nota de rodape",
+                "nota de rodapé",
+                "endereco valido",
+                "endereço válido",
+            }
+        ):
+            return "descartado por regra de verificação"
+    if comment.action_type == "author_confirmation":
+        if not any(
+            token in message_blob
+            for token in {"conferir", "confirmar", "diverge", "divergencia", "divergência", "autoria", "ano"}
+        ):
+            return "descartado por regra de verificação"
     return None

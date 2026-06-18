@@ -261,9 +261,15 @@ def run_prepared_review(
 
     consolidated_comments = _consolidate_final_comments(final_comments, prepared_document.refs)
 
+    def _coordinate_with_profile():
+        try:
+            return coordinate_answer(question=question, comments=consolidated_comments, profile_key=profile_key)
+        except TypeError:
+            return coordinate_answer(question=question, comments=consolidated_comments)
+
     if failed_agents:
         failed_summary = "; ".join(f"{agent}: {status}" for agent, status in failed_agents)
-        base_answer = coordinate_answer(question=question, comments=consolidated_comments)
+        base_answer = _coordinate_with_profile()
         final_answer = (
             (base_answer or "").rstrip()
             + "\n\n"
@@ -275,7 +281,7 @@ def run_prepared_review(
             agent_order=agent_order,
             toc=prepared_document.toc,
         )
-        final_answer = coordinate_answer(question=question, comments=consolidated_comments)
+        final_answer = _coordinate_with_profile()
 
     return ConversationResult(
         answer=final_answer,

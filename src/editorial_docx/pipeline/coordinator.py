@@ -14,9 +14,9 @@ def build_coordinator_excerpt(total_chunks: int, agent_order: list[str], toc: li
     )
 
 
-def coordinate_answer(question: str, comments) -> str:
+def coordinate_answer(question: str, comments, profile_key: str | None = None) -> str:
     """Gera a resposta final consolidada a partir dos comentários aceitos."""
-    return build_coordinator_answer(question=question, comments=comments)
+    return build_coordinator_answer(question=question, comments=comments, profile_key=profile_key)
 
 
 __all__ = ["build_coordinator_excerpt", "coordinate_answer"]

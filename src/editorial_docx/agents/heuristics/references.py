@@ -58,6 +58,11 @@ NON_AUTHOR_REFERENCE_TOKENS = {
 }
 
 _CITATION_PLACEHOLDER_RE = re.compile(r"\(?\s*X{2,}\s*CITAR\s*X{2,}\s*\)?", flags=re.IGNORECASE)
+_URL_RE = re.compile(r"https?://|www\.", flags=re.IGNORECASE)
+_DATASET_HINT_RE = re.compile(
+    r"\b(microdados|base de dados|dataset|sidra|tabnet|painel|portal|beneficiometro|beneficiômetro|mapbiomas|seeg)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def looks_like_reference_author(author_raw: str) -> bool:
@@ -140,6 +145,7 @@ def probable_reference_match_comment(match: ProbableReferenceMatch) -> AgentComm
             paragraph_index=citation.paragraph_index,
             message="A citação foi localizada na lista final, mas a entrada correspondente está malformada ou concatenada com outra referência.",
             issue_excerpt=citation.excerpt,
+            action_type="author_confirmation",
             suggested_fix=(
                 f"Revisar a referência de {citation.label}: a autoria coincide com `{reference.label}`, "
                 "mas a entrada precisa ser separada ou reformatada antes da conferência final."
@@ -153,6 +159,7 @@ def probable_reference_match_comment(match: ProbableReferenceMatch) -> AgentComm
             paragraph_index=citation.paragraph_index,
             message="A citação tem correspondência parcial com a lista final, mas a autoria não coincide integralmente.",
             issue_excerpt=citation.excerpt,
+            action_type="author_confirmation",
             suggested_fix=(
                 f"Conferir {citation.label} no corpo do texto com `{reference.label}` na lista final: "
                 "há sobreposição parcial de autoria, mas pelo menos um autor ou o ano diverge."
@@ -165,6 +172,7 @@ def probable_reference_match_comment(match: ProbableReferenceMatch) -> AgentComm
         paragraph_index=citation.paragraph_index,
         message="A citação provavelmente corresponde a uma referência já existente, mas há divergência entre os dados autor-data do corpo e da lista final.",
         issue_excerpt=citation.excerpt,
+        action_type="author_confirmation",
         suggested_fix=(
             f"Conferir {citation.label} no corpo do texto com `{reference.label}` na lista final: "
             "a autoria coincide, mas o ano ou a forma de registro não bate."
@@ -231,6 +239,7 @@ def heuristic_reference_comments(
                 paragraph_index=idx,
                 issue_excerpt=issue,
                 suggested_fix=fix,
+                action_type="auto_fix_candidate",
             )
         )
 
@@ -270,6 +279,21 @@ def heuristic_reference_comments(
         if parsed_entry is not None and reference_pipeline is None:
             for issue in validate_reference_entry(parsed_entry):
                 add(idx, parsed_entry.raw_text, issue.suggested_fix, issue.message, issue.category)
+        if block_type == "reference_entry" and _URL_RE.search(text) and _DATASET_HINT_RE.search(text):
+            key = (idx, text, "dataset-footnote")
+            if key not in seen:
+                seen.add(key)
+                comments.append(
+                    AgentComment(
+                        agent="referencias",
+                        category="reference_scope",
+                        message="O registro parece remeter a base de dados ou portal de consulta, e pode exigir tratamento editorial fora da lista final de referências.",
+                        paragraph_index=idx,
+                        issue_excerpt=text,
+                        suggested_fix="Confirmar se este item deve sair da seção Referências e se o link de acesso deve ser informado em nota de rodapé.",
+                        action_type="production_request",
+                    )
+                )
         if block_type == "reference_entry":
             year_matches = re.findall(r"\b(?:19|20)\d{2}\b", text)
             if len(year_matches) >= 2 and year_matches[0] != year_matches[-1]:
@@ -328,6 +352,7 @@ def heuristic_reference_global_comments(
                     paragraph_index=anchor.citation_paragraph_index,
                     message=message,
                     issue_excerpt=anchor.citation_excerpt,
+                    action_type="author_confirmation",
                     suggested_fix=f"Conferir {anchor.citation_label} no corpo do texto com `{anchor.reference_label}` na lista final.",
                 )
             )
@@ -342,6 +367,7 @@ def heuristic_reference_global_comments(
                     paragraph_index=candidate.paragraph_index,
                     message="Esta citação no corpo do texto não tem correspondência clara na lista de referências.",
                     issue_excerpt=candidate.excerpt,
+                    action_type="production_request",
                     suggested_fix=f"Incluir ou revisar a referência correspondente a {candidate.label} na lista final.",
                 )
             )
@@ -354,6 +380,7 @@ def heuristic_reference_global_comments(
                     paragraph_index=reference_heading_idx,
                     message="Há referências na lista que não foram localizadas nas citações do corpo do texto.",
                     issue_excerpt=chunks[reference_heading_idx],
+                    action_type="production_request",
                     suggested_fix=f"Verificar estas obras: {summarize_reference_labels(uncited_labels)}.",
                 )
             )
@@ -366,6 +393,7 @@ def heuristic_reference_global_comments(
                     paragraph_index=reference_heading_idx,
                     message="Há citações no corpo do texto sem correspondência clara na lista de referências.",
                     issue_excerpt=chunks[reference_heading_idx],
+                    action_type="production_request",
                     suggested_fix=f"Incluir ou revisar as referências correspondentes a: {summarize_reference_labels(missing_labels)}.",
                 )
             )
@@ -405,6 +433,7 @@ def heuristic_reference_global_comments(
                 paragraph_index=candidate.paragraph_index,
                 message="Esta citação no corpo do texto não tem correspondência clara na lista de referências.",
                 issue_excerpt=candidate.excerpt,
+                action_type="production_request",
                 suggested_fix=f"Incluir ou revisar a referência correspondente a {candidate.label} na lista final.",
             )
         )
@@ -417,6 +446,7 @@ def heuristic_reference_global_comments(
                 paragraph_index=reference_heading_idx,
                 message="Há referências na lista que não foram localizadas nas citações do corpo do texto.",
                 issue_excerpt=chunks[reference_heading_idx],
+                action_type="production_request",
                 suggested_fix=f"Verificar estas obras: {summarize_reference_labels(uncited_labels)}.",
             )
         )
@@ -429,6 +459,7 @@ def heuristic_reference_global_comments(
                 paragraph_index=reference_heading_idx,
                 message="Há citações no corpo do texto sem correspondência clara na lista de referências.",
                 issue_excerpt=chunks[reference_heading_idx],
+                action_type="production_request",
                 suggested_fix=f"Incluir ou revisar as referências correspondentes a: {summarize_reference_labels(missing_labels)}.",
             )
         )
@@ -467,6 +498,7 @@ def heuristic_reference_placeholder_comments(
                     message="Ha um marcador provisorio de citacao no corpo do texto, indicando referencia ainda nao resolvida.",
                     paragraph_index=idx,
                     issue_excerpt=match.group(0),
+                    action_type="production_request",
                     suggested_fix="Substituir este marcador pela citacao autor-data correspondente ou remover o placeholder antes da versao final.",
                 )
             )

@@ -87,6 +87,7 @@ def locate_comments_in_window(
                 paragraph_index=resolved_index,
                 issue_excerpt=comment.issue_excerpt,
                 suggested_fix=comment.suggested_fix,
+                action_type=comment.action_type,
                 auto_apply=comment.auto_apply,
                 format_spec=comment.format_spec,
                 review_status=comment.review_status,

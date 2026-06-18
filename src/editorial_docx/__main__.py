@@ -11,7 +11,7 @@ from .document_loader import load_document
 from .graph_chat import run_conversation
 from .llm import get_llm_model_tag, get_runtime_settings
 from .models import agent_short_label
-from .prompts import AGENT_ORDER
+from .prompts import AGENT_ORDER, detect_prompt_profile
 
 
 def _serialize_comment(comment) -> dict[str, object]:
@@ -23,6 +23,7 @@ def _serialize_comment(comment) -> dict[str, object]:
         "paragraph_index": comment.paragraph_index,
         "issue_excerpt": comment.issue_excerpt,
         "suggested_fix": comment.suggested_fix,
+        "action_type": comment.action_type,
     }
 
 
@@ -163,6 +164,7 @@ def main() -> int:
         user_comments=loaded.user_comments,
         question=args.question,
         selected_agents=AGENT_ORDER.copy(),
+        profile_key=detect_prompt_profile(input_path.name).key,
     )
     visible_comments = result.comments[:]
 

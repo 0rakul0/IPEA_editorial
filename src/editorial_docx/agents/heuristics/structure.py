@@ -41,11 +41,12 @@ def heuristic_structure_comments(batch_indexes: list[int], chunks: list[str], re
                 AgentComment(
                     agent="estrutura",
                     category="numeração e hierarquia de seções",
-                    message="Este título deveria seguir a sequência de numeração das seções.",
+                    message="Este título parece precisar de numeração para acompanhar a sequência das seções; convém confirmar a enumeração editorial.",
                     paragraph_index=idx,
                     issue_excerpt=text,
-                    suggested_fix=f"{next_number}. {text}",
-                    auto_apply=True,
+                    suggested_fix=f"{next_number} {text}",
+                    action_type="author_confirmation",
+                    auto_apply=False,
                 )
             )
             next_number += 1

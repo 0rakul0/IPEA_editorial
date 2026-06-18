@@ -54,4 +54,18 @@ def rejection_reason(ctx: ValidationContext) -> str | None:
                 return "descartado por regra de verificação"
     if comment.auto_apply and not is_safe_structure_auto_apply(comment, chunks):
         return "descartado por regra de verificação"
+    if comment.action_type == "production_request":
+        if block_type not in {"heading", "reference_heading"}:
+            return "descartado por regra de verificação"
+        if not any(
+            token in folded_blob
+            for token in {"credito", "crédito", "secao", "seção", "subsecao", "subseção", "conclus", "apendice", "apêndice", "anexo"}
+        ):
+            return "descartado por regra de verificação"
+    if comment.action_type == "author_confirmation":
+        if not any(
+            token in folded_blob
+            for token in {"apendice", "apêndice", "material suplementar", "valid", "confirm", "sigla", "interpret"}
+        ):
+            return "descartado por regra de verificação"
     return None

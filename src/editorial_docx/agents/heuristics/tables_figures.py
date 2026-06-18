@@ -6,6 +6,28 @@ from ...models import AgentComment
 from ...review_patterns import _folded_text, _ref_block_type
 
 
+def _looks_mostly_textual_table(start_idx: int, chunks: list[str], refs: list[str]) -> bool:
+    """Approximates whether nearby table cells are predominantly textual."""
+    sample: list[str] = []
+    idx = start_idx + 1
+    while idx < len(chunks) and idx < len(refs) and len(sample) < 8:
+        if _ref_block_type(refs[idx]) != "table_cell":
+            break
+        cell = (chunks[idx] or "").strip()
+        if cell:
+            sample.append(cell)
+        idx += 1
+    if len(sample) < 3:
+        return False
+    textual = 0
+    for cell in sample:
+        letters = len(re.findall(r"[A-Za-zÀ-ÿ]", cell))
+        digits = len(re.findall(r"\d", cell))
+        if letters >= max(4, digits + 2):
+            textual += 1
+    return textual / len(sample) >= 0.7
+
+
 def heuristic_table_figure_comments(batch_indexes: list[int], chunks: list[str], refs: list[str]) -> list[AgentComment]:
     """Handles heuristic table figure comments."""
     comments: list[AgentComment] = []
@@ -32,6 +54,19 @@ def heuristic_table_figure_comments(batch_indexes: list[int], chunks: list[str],
                     paragraph_index=idx,
                     issue_excerpt=text,
                     suggested_fix=fix,
+                    action_type="auto_fix_candidate",
+                )
+            )
+        if re.match(r"^tabela\s+\d+[:\s]", norm, flags=re.IGNORECASE) and _looks_mostly_textual_table(idx, chunks, refs):
+            comments.append(
+                AgentComment(
+                    agent="tabelas_figuras",
+                    category="Quadro/Tabela",
+                    message="Pelo padrão editorial, ilustrações com células predominantemente textuais tendem a ser tratadas como quadro, não tabela.",
+                    paragraph_index=idx,
+                    issue_excerpt=text,
+                    suggested_fix="Verificar se este bloco deve ser apresentado como `QUADRO`, e não como `TABELA`.",
+                    action_type="production_request",
                 )
             )
         next_idx = idx + 1
@@ -47,6 +82,7 @@ def heuristic_table_figure_comments(batch_indexes: list[int], chunks: list[str],
                     paragraph_index=idx,
                     issue_excerpt=text,
                     suggested_fix="Adicionar uma linha própria com `Fonte:` ou `Elaboração:` abaixo do bloco.",
+                    action_type="production_request",
                 )
             )
 
