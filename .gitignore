@@ -22,6 +22,10 @@ dist/
 .idea/
 .vscode/
 
+# Skill installed copies (canonical is .opencode/skills/)
+.claude/
+.agents/
+
 # App temp
 .tmp/
 

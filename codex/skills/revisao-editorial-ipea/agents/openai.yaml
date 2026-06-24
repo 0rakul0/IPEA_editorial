@@ -1,7 +1,0 @@
-interface:
-  display_name: "Revisão Editorial Ipea"
-  short_description: "Revisa e avalia agentes editoriais Ipea"
-  default_prompt: "Use $revisao-editorial-ipea para revisar este documento ou aprender com suas versões editoriais."
-
-policy:
-  allow_implicit_invocation: true

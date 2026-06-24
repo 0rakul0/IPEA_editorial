@@ -51,10 +51,10 @@ Também existe a seção `missed_issues`, usada para registrar problemas que o m
 Exemplo:
 
 ```powershell
-python -m src.editorial_docx.gold_dataset `
-  "D:\github\lang_IPEA_editorial\testes\234362_TD_3125_Benefícios coletivos (53 laudas)_output.relatorio.json" `
-  --output "D:\github\lang_IPEA_editorial\testes\dataset_ouro\seed_234362_td_3125.json" `
-  --source-document "234362_TD_3125_Benefícios coletivos (53 laudas).docx" `
+uv run editorial-gold-dataset `
+  "D:\caminho\relatorio.json" `
+  --output "testes/dataset_ouro/seed_meu_doc.json" `
+  --source-document "meu_doc.docx" `
   --model-name "gpt-5.2" `
   --run-label "seed_inicial"
 ```
@@ -70,9 +70,9 @@ python -m src.editorial_docx.gold_dataset `
 Exemplo:
 
 ```powershell
-python -m src.editorial_docx.gold_metrics `
-  "D:\github\lang_IPEA_editorial\testes\dataset_ouro" `
-  --output "D:\github\lang_IPEA_editorial\testes\dataset_ouro\metricas_reais.json"
+uv run editorial-gold-metrics `
+  "testes/dataset_ouro" `
+  --output "testes/dataset_ouro/metricas_reais.json"
 ```
 
 Saídas calculadas:

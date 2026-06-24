@@ -1,3 +1,10 @@
+"""Configurações padrão do pipeline editorial.
+
+As variáveis de ambiente usadas pelo sistema (LLM_*, OPENAI_*, OLLAMA_*)
+estão documentadas em .env.example na raiz do projeto. Os valores abaixo
+são os defaults aplicados quando a variável de ambiente não existe.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

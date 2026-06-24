@@ -198,59 +198,74 @@ Observacao: aqui as ramificacoes representam produtos derivados do matcher e do 
 
 ## Instalacao
 
-Requisitos:
+### Requisitos
 
 - Python 3.10+
-- uma LLM configurada via `.env`
+- Uma chave de API de LLM (OpenAI, Ollama ou provedor compatível)
 
-### Instalacao com uv
+### 1. Instalar dependencias
 
-Se voce quiser rodar o projeto com `uv`, o fluxo recomendado e este:
+Com `uv` (recomendado):
 
 ```bash
 uv sync --dev
 ```
 
-Isso cria/sincroniza o ambiente virtual do projeto e instala o proprio pacote em modo de desenvolvimento.
+Com `pip`:
 
-Depois configure o `.env` na raiz, por exemplo:
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -U pip
+pip install -e .[dev]
+```
+
+### 2. Configurar chave da API
+
+Copie o arquivo de exemplo e edite com seus dados:
 
 ```bash
 copy .env.example .env
 ```
 
-Para executar a CLI com `uv`:
+O sistema le as variaveis do `.env` na raiz. Configure conforme seu provedor:
 
+**OpenAI** (mais comum):
+```env
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.2
+LLM_API_KEY=sk-sua-chave-aqui
+```
+
+**Ollama** (local):
+```env
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_MODEL=llama3.1:8b
+LLM_API_KEY=ollama
+```
+
+**OpenAI-compatible** (servidor interno):
+```env
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=http://servidor-interno/v1
+LLM_MODEL=nome-do-modelo
+LLM_API_KEY=token-opcional
+```
+
+> A chave configurada serve tanto para a CLI quanto para a interface Streamlit. Nao é necessario configurar separadamente.
+
+### 3. Executar
+
+**CLI:**
 ```bash
 uv run editorial-docx "D:\caminho\para\arquivo.docx"
 ```
 
-Alternativa equivalente:
-
-```bash
-uv run python -m editorial_docx "D:\caminho\para\arquivo.docx"
-```
-
-Para abrir a interface web:
-
+**Interface Web (Streamlit):**
 ```bash
 uv run streamlit run streamlit_app.py
 ```
-
-Instalacao basica no ambiente virtual:
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-python -m pip install -U pip
-python -m pip install -e .[dev]
-```
-
-O grupo `dev` instala:
-
-- `pytest`
-- `ruff`
-- `mypy`
 
 ## Execucao
 
@@ -289,6 +304,40 @@ Argumentos principais:
 - `--output-docx`
 - `--output-json`
 - `--output-normalized-json`
+
+Comandos auxiliares:
+
+- `uv run editorial-gold-dataset` — gerar scaffold do dataset ouro
+- `uv run editorial-gold-metrics` — consolidar metricas do dataset ouro
+- `uv run editorial-benchmark` — rodar benchmark entre modelos LLM
+
+### AI Skill (OpenCode / Claude Code / Codex)
+
+O projeto inclui uma skill para assistentes de IA que reconhece os três modos de acesso e executa o pipeline automaticamente. Instalação:
+
+```powershell
+# Escopo repo (apenas neste diretorio)
+.\install.ps1 -Scope repo
+
+# Escopo user (global, disponivel em qualquer projeto)
+.\install.ps1 -Scope user
+```
+
+```bash
+# Linux/macOS
+bash install.sh repo
+bash install.sh user
+```
+
+A skill é instalada nos paths:
+
+| Path | Ferramenta |
+|---|---|
+| `.opencode/skills/` ou `~/.config/opencode/skills/` | OpenCode |
+| `.claude/skills/` ou `~/.claude/skills/` | Claude Code |
+| `.agents/skills/` ou `~/.agents/skills/` | OpenAI Codex |
+
+A fonte canonica da skill esta em `.opencode/skills/revisao-editorial-ipea/SKILL.md`.
 
 ## Saidas
 
