@@ -150,3 +150,38 @@ class ConversationResult:
     comments: list[AgentComment]
     verification: VerificationSummary = field(default_factory=VerificationSummary)
     trace: ExecutionTrace = field(default_factory=ExecutionTrace)
+
+
+@dataclass(slots=True)
+class LiteratureQuery:
+    text: str
+    rationale: str = ""
+    source: str = "heuristic"
+
+
+@dataclass(slots=True)
+class LiteratureWork:
+    source_id: str
+    title: str
+    abstract: str = ""
+    authors: list[str] = field(default_factory=list)
+    publication_year: int | None = None
+    publication_date: str = ""
+    venue: str = ""
+    doi: str = ""
+    landing_page_url: str = ""
+    cited_by_count: int = 0
+    relevance_score: float = 0.0
+    matched_queries: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class LiteratureGroundingResult:
+    manuscript_summary: str = ""
+    state_of_art_summary: str = ""
+    manuscript_comparison: str = ""
+    warnings: list[str] = field(default_factory=list)
+    queries: list[LiteratureQuery] = field(default_factory=list)
+    works: list[LiteratureWork] = field(default_factory=list)
+    provider: str = "openalex"
+    llm_used: bool = False

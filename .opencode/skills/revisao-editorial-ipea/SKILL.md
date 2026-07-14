@@ -1,13 +1,13 @@
 ---
 name: revisao-editorial-ipea
-description: Executar, diagnosticar, avaliar e aperfeiçoar a revisão editorial Ipea de documentos DOCX, PDF ou normalized_document.json usando o pipeline lang_IPEA_editorial
+description: "Executar, diagnosticar, avaliar e aperfeiçoar a revisão editorial Ipea de documentos DOCX, PDF ou normalized_document.json usando o pipeline lang_IPEA_editorial. Use também quando o pedido envolver grounding bibliográfico opcional na Streamlit: busca de literatura recente, recuperação de metadados e resumos, síntese curta do estado da arte e comparação entre o manuscrito e a base externa."
 ---
 
 # Revisão Editorial Ipea
 
 ## Quando usar
 
-Quando o usuário pedir revisão editorial, Texto para Discussão (TD), DOCX comentado, relatório JSON, diagnóstico, dataset ouro, comparação com revisão humana, aprendizado a partir de versões do documento, avaliação de falsos positivos, calibragem de agentes (gramática, sinopse, tabelas, estrutura, referências ABNT, tipografia).
+Quando o usuário pedir revisão editorial, Texto para Discussão (TD), DOCX comentado, relatório JSON, diagnóstico, dataset ouro, comparação com revisão humana, aprendizado a partir de versões do documento, avaliação de falsos positivos, calibragem de agentes (gramática, sinopse, tabelas, estrutura, referências ABNT, tipografia) ou leitura substantiva com grounding externo de literatura recente.
 
 ## Fluxo principal
 
@@ -15,6 +15,8 @@ Quando o usuário pedir revisão editorial, Texto para Discussão (TD), DOCX com
 2. Executar revisão com `uv run editorial-docx <caminho/docs>` ou via wrapper.
 3. Conferir código de saída e artefatos gerados.
 4. Resumir: documento processado, total de comentários, agentes com falha, artefatos produzidos.
+
+Se o pedido for sobre literatura recente ou estado da arte, executar o fluxo opcional de grounding externo na Streamlit e manter essa camada separada da revisão editorial principal.
 
 ## Pipeline (visão geral)
 
@@ -222,6 +224,39 @@ uv run editorial-docx <arquivo.docx> --output-docx revisado.docx
 uv run streamlit run streamlit_app.py
 ```
 
+### 2.1 Grounding externo opcional na Streamlit
+
+Usar quando o usuário pedir:
+- busca de literatura recente;
+- recuperação de metadados e resumos;
+- síntese curta do estado da arte;
+- comparação entre o manuscrito e a base recuperada.
+
+Fluxo:
+1. Garantir `OPENALEX_API_KEY` e `OPENALEX_EMAIL` no `.env` quando houver volume real de uso.
+2. Abrir a Streamlit e carregar o documento.
+3. Na sidebar, usar `Grounding Externo`.
+4. Ajustar `Janela temporal (anos)` e `Trabalhos finais`.
+5. Rodar `Rodar grounding externo`.
+6. Resumir ao usuário:
+   - consultas geradas;
+   - trabalhos recuperados;
+   - síntese do manuscrito;
+   - estado da arte relevante;
+   - comparação manuscrito vs. literatura;
+   - avisos de cobertura ou cota.
+
+Artefatos e pontos de código:
+- UI: `streamlit_app.py`
+- Lógica: `src/editorial_docx/literature_grounding.py`
+- Variáveis opcionais: `.env` / `.env.example`
+
+Observações operacionais:
+- O grounding atual usa OpenAlex, não arXiv.
+- Sem `OPENALEX_API_KEY`, a cota anônima é pequena; a app limita consultas e pode devolver `429`.
+- Essa camada é de apoio analítico; não deve virar comentário automático no DOCX.
+- Tratar originalidade/novidade com cautela e sempre sinalizar limitações de cobertura.
+
 ### 3. AI Skill (assistente)
 A skill carregada por este arquivo permite que o assistente execute o pipeline automaticamente quando solicitado. O assistente usa os comandos abaixo:
 
@@ -255,6 +290,14 @@ uv run editorial-gold-dataset "<relatorio>.json" --output "testes/dataset_ouro/s
 - `issue_excerpt` mínimo e ancorável; `suggested_fix` concreto.
 - Um problema por comentário.
 - Rejeitar comentários vagos, especulativos, redundantes ou fora de escopo.
+
+## Guardrails do grounding externo
+
+- Não inventar artigos, DOI, autores, anos ou resumos.
+- Deixar claro quando a base externa for insuficiente, ruidosa ou enviesada.
+- Não converter automaticamente achados substantivos em comentários editoriais no Word.
+- Diferenciar `evidência recuperada` de `inferência do assistente`.
+- Tratar a comparação com a literatura como apoio ao revisor, não como parecer conclusivo.
 
 ## Como alterar o pipeline
 

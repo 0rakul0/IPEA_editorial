@@ -20,6 +20,7 @@ from src.editorial_docx.config import build_output_paths
 from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document, load_normalized_document
 from src.editorial_docx.graph_chat import run_conversation
+from src.editorial_docx.literature_grounding import literature_grounding_to_dict, run_literature_grounding
 from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtime_settings, list_available_models
 from src.editorial_docx.models import AgentComment, ExecutionTrace, VerificationSummary, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
@@ -108,6 +109,29 @@ with st.sidebar:
                 "source": f"agent:{agent}",
             }
 
+    st.divider()
+    st.markdown("### Grounding Externo")
+    st.caption("Camada opcional para buscar literatura recente e comparar o manuscrito com essa base.")
+    grounding_recent_years = st.slider(
+        "Janela temporal (anos)",
+        min_value=2,
+        max_value=10,
+        value=int(st.session_state.get("grounding_recent_years", 5)),
+    )
+    grounding_max_works = st.slider(
+        "Trabalhos finais",
+        min_value=4,
+        max_value=12,
+        value=int(st.session_state.get("grounding_max_works", 8)),
+    )
+    st.session_state.grounding_recent_years = grounding_recent_years
+    st.session_state.grounding_max_works = grounding_max_works
+    if st.button("Rodar grounding externo", key="sidebar_run_grounding", use_container_width=True):
+        st.session_state.pending_grounding = {
+            "recent_years": grounding_recent_years,
+            "max_works": grounding_max_works,
+        }
+
 CHAT_HEIGHT_VH = 72
 
 st.markdown(
@@ -120,6 +144,34 @@ st.markdown(
 .small-nav {{
   font-size: 0.82rem;
   line-height: 1.2;
+}}
+div[data-testid="stFileUploaderDropzone"] {{
+  padding: 0.85rem 0.9rem;
+  min-height: 5.25rem;
+}}
+.top-grid-card {{
+  border: 1px solid rgba(49, 51, 63, 0.15);
+  border-radius: 0.9rem;
+  padding: 0.85rem 0.95rem 0.75rem;
+  background: rgba(248, 249, 252, 0.95);
+  height: 100%;
+}}
+.top-grid-label {{
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 0.45rem;
+}}
+.top-grid-value {{
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.25;
+}}
+.top-grid-muted {{
+  font-size: 0.84rem;
+  color: #6b7280;
+  line-height: 1.3;
 }}
 </style>
 """,
@@ -157,6 +209,12 @@ for key, default in {
     "review_trace": None,
     "review_verification": None,
     "session_temp_dir": None,
+    "pending_grounding": None,
+    "grounding_result": None,
+    "grounding_logs": [],
+    "grounding_error": "",
+    "grounding_recent_years": 5,
+    "grounding_max_works": 8,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -195,6 +253,20 @@ def _build_rows() -> list[dict]:
             }
         )
     return rows
+
+
+def _render_info_card(label: str, value: str, detail: str) -> None:
+    """Renders one compact summary card for the top grid."""
+    st.markdown(
+        (
+            '<div class="top-grid-card">'
+            f'<div class="top-grid-label">{html.escape(label)}</div>'
+            f'<div class="top-grid-value">{html.escape(value)}</div>'
+            f'<div class="top-grid-muted">{html.escape(detail)}</div>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def _merge_comments(existing: list[AgentComment], incoming: list[AgentComment]) -> list[AgentComment]:
@@ -475,6 +547,23 @@ def _build_diagnostics_payload(export_comments: list[AgentComment]) -> dict[str,
     }
 
 
+def _build_grounding_payload() -> dict[str, object] | None:
+    """Serializes the latest grounding run for export."""
+    grounding_result = st.session_state.grounding_result
+    if grounding_result is None:
+        return None
+    runtime = get_runtime_settings()
+    return {
+        "source_name": st.session_state.source_name,
+        "provider": "openalex",
+        "runtime": runtime,
+        "recent_years": st.session_state.grounding_recent_years,
+        "max_works": st.session_state.grounding_max_works,
+        "progress_logs": st.session_state.grounding_logs,
+        "grounding": literature_grounding_to_dict(grounding_result),
+    }
+
+
 def _persist_review_outputs(report_rows: list[dict], export_comments: list[AgentComment]) -> tuple[Path, str, Path | None, bytes | None]:
     """Handles persist review outputs."""
     source_for_outputs = (
@@ -750,10 +839,43 @@ def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: 
     st.session_state.review_question = ""
     st.session_state.review_trace = None
     st.session_state.review_verification = None
+    st.session_state.pending_grounding = None
+    st.session_state.grounding_result = None
+    st.session_state.grounding_logs = []
+    st.session_state.grounding_error = ""
 
 
-uploaded = st.file_uploader("Carregar documento (.docx ou .pdf)", type=["docx", "pdf"])
-uploaded_normalized = st.file_uploader("Carregar normalized_document.json", type=["json"])
+top_col_a, top_col_b, top_col_c, top_col_d = st.columns(4, gap="small")
+
+with top_col_a:
+    with st.container(border=True):
+        st.markdown('<div class="top-grid-label">Documento principal</div>', unsafe_allow_html=True)
+        uploaded = st.file_uploader(
+            "Carregar documento (.docx ou .pdf)",
+            type=["docx", "pdf"],
+            label_visibility="collapsed",
+        )
+
+with top_col_b:
+    with st.container(border=True):
+        st.markdown('<div class="top-grid-label">Documento normalizado</div>', unsafe_allow_html=True)
+        uploaded_normalized = st.file_uploader(
+            "Carregar normalized_document.json",
+            type=["json"],
+            label_visibility="collapsed",
+        )
+
+loaded_name = st.session_state.source_name or "Nenhum arquivo"
+loaded_kind = (st.session_state.doc_kind or "—").upper() if st.session_state.doc_kind else "Aguardando upload"
+profile_value = st.session_state.doc_profile or "GENERIC"
+chunk_count = len(st.session_state.paragraphs)
+section_count = len(st.session_state.sections)
+
+with top_col_c:
+    _render_info_card("Documento carregado", loaded_name, f"Tipo: {loaded_kind}")
+
+with top_col_d:
+    _render_info_card("Estrutura", f"{chunk_count} blocos", f"Perfil: {profile_value} | Seções: {section_count}")
 
 if uploaded is not None:
     file_bytes = uploaded.getvalue()
@@ -966,6 +1088,38 @@ elif st.session_state.pending_run and not st.session_state.paragraphs:
     st.warning("Carregue um documento antes de executar os agentes.")
     st.session_state.pending_run = None
 
+if st.session_state.pending_grounding and st.session_state.paragraphs:
+    grounding_request = st.session_state.pending_grounding
+    st.session_state.pending_grounding = None
+    grounding_logs: list[str] = []
+    grounding_status = st.empty()
+
+    def _on_grounding_status(message: str) -> None:
+        timestamp = time.strftime("%H:%M:%S")
+        grounding_logs.append(f"- `{timestamp}` {message}")
+        grounding_status.markdown("**Grounding externo em andamento**\n" + "\n".join(grounding_logs[-8:]))
+
+    with st.spinner("Buscando literatura recente e comparando com o manuscrito..."):
+        try:
+            st.session_state.grounding_result = run_literature_grounding(
+                list(st.session_state.paragraphs),
+                list(st.session_state.sections),
+                profile_key=st.session_state.doc_profile,
+                recent_years=int(grounding_request.get("recent_years", 5)),
+                max_works=int(grounding_request.get("max_works", 8)),
+                on_status=_on_grounding_status,
+            )
+            st.session_state.grounding_error = ""
+        except Exception as exc:  # pragma: no cover - UI surface
+            st.session_state.grounding_result = None
+            st.session_state.grounding_error = str(exc)
+        finally:
+            st.session_state.grounding_logs = grounding_logs
+    grounding_status.empty()
+elif st.session_state.pending_grounding and not st.session_state.paragraphs:
+    st.warning("Carregue um documento antes de rodar o grounding externo.")
+    st.session_state.pending_grounding = None
+
 rows = _build_rows()
 report_json_path = None
 report_json_text = None
@@ -1016,6 +1170,78 @@ with col_diag:
                 mime="application/json",
                 use_container_width=True,
             )
+
+    st.divider()
+    st.subheader("Grounding Externo")
+
+    grounding_payload = _build_grounding_payload()
+    grounding_result = st.session_state.grounding_result
+
+    if not st.session_state.paragraphs:
+        st.info("Carregue um documento para buscar literatura recente e comparar com o manuscrito.")
+    elif st.session_state.grounding_error:
+        st.error(st.session_state.grounding_error)
+    elif grounding_result is None:
+        st.info("Use o botão da barra lateral para rodar a camada opcional de grounding externo.")
+    else:
+        metric_a, metric_b, metric_c = st.columns(3)
+        metric_a.metric("Consultas", len(grounding_result.queries))
+        metric_b.metric("Trabalhos", len(grounding_result.works))
+        metric_c.metric("LLM usada", "Sim" if grounding_result.llm_used else "Não")
+
+        if grounding_payload is not None:
+            grounding_json_name = f"{st.session_state.source_name}_grounding_externo.json"
+            st.download_button(
+                label="Baixar grounding JSON",
+                data=json.dumps(grounding_payload, ensure_ascii=False, indent=2),
+                file_name=grounding_json_name,
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        if grounding_result.warnings:
+            for warning in grounding_result.warnings:
+                st.warning(warning)
+
+        st.markdown("**Síntese do manuscrito**")
+        st.write(grounding_result.manuscript_summary or "Síntese indisponível.")
+
+        st.markdown("**Estado da arte relevante**")
+        st.write(grounding_result.state_of_art_summary or "Síntese indisponível.")
+
+        st.markdown("**Comparação com o manuscrito**")
+        st.write(grounding_result.manuscript_comparison or "Comparação indisponível.")
+
+        if st.session_state.grounding_logs:
+            with st.expander("Log da execução", expanded=False):
+                st.markdown("\n".join(st.session_state.grounding_logs))
+
+        if grounding_result.queries:
+            with st.expander("Consultas geradas", expanded=False):
+                for idx, query in enumerate(grounding_result.queries, start=1):
+                    st.markdown(f"**{idx}.** `{query.text}`")
+                    if query.rationale:
+                        st.caption(query.rationale)
+                    st.caption(f"Origem: {query.source}")
+
+        if grounding_result.works:
+            with st.expander("Literatura recuperada", expanded=False):
+                for idx, work in enumerate(grounding_result.works, start=1):
+                    year = f" ({work.publication_year})" if work.publication_year else ""
+                    venue = f" | {work.venue}" if work.venue else ""
+                    st.markdown(f"**{idx}. {work.title}{year}**")
+                    st.caption(
+                        f"Relevância: {work.relevance_score:.2f} | Citações: {work.cited_by_count}{venue}"
+                    )
+                    if work.authors:
+                        st.write("Autores:", ", ".join(work.authors))
+                    if work.doi:
+                        st.write("DOI:", work.doi)
+                    if work.landing_page_url:
+                        st.markdown(f"[Abrir registro]({work.landing_page_url})")
+                    if work.matched_queries:
+                        st.caption("Consultas relacionadas: " + "; ".join(work.matched_queries))
+                    st.write(work.abstract or "Resumo não disponível.")
 
 with col_comments:
     st.subheader("Erros Encontrados")
