@@ -20,7 +20,7 @@ from src.editorial_docx.config import build_output_paths
 from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document, load_normalized_document
 from src.editorial_docx.graph_chat import run_conversation
-from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtime_settings
+from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtime_settings, list_available_models
 from src.editorial_docx.models import AgentComment, ExecutionTrace, VerificationSummary, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
@@ -50,6 +50,22 @@ with st.sidebar:
     )
     if llm_config.get("base_url"):
         st.caption(f"Base URL: `{llm_config['base_url']}`")
+    if st.button("Listar modelos disponíveis", use_container_width=True):
+        with st.spinner("Consultando endpoint de modelos..."):
+            st.session_state.llm_models_result = list_available_models(llm_config, timeout=15.0)
+    models_result = st.session_state.get("llm_models_result")
+    if isinstance(models_result, dict) and models_result.get("provider") == llm_config.get("provider"):
+        if models_result.get("endpoint"):
+            st.caption(f"Endpoint de modelos: `{models_result['endpoint']}`")
+        available_models = models_result.get("available_models") or []
+        if models_result.get("ok"):
+            if available_models:
+                st.caption(f"Modelos disponíveis ({len(available_models)}):")
+                st.code("\n".join(str(item) for item in available_models), language="text")
+            else:
+                st.info("O endpoint respondeu, mas não retornou modelos reconhecíveis.")
+        elif models_result.get("error"):
+            st.warning(str(models_result["error"]))
     if env_path.exists():
         st.caption("Arquivo .env detectado no repositório. Usando configuração local.")
     else:

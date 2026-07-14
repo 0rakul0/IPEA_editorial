@@ -9,6 +9,7 @@ from editorial_docx.llm import (
     get_llm_seed,
     get_review_agent_max_workers,
     get_runtime_settings,
+    list_available_models,
 )
 
 
@@ -33,6 +34,20 @@ def _clear_llm_env(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(llm_module, "_load_env", lambda: None)
+
+
+class _FakeResponse:
+    def __init__(self, payload: str):
+        self._payload = payload.encode("utf-8")
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 def test_get_llm_config_defaults_to_openai(monkeypatch):
@@ -140,6 +155,44 @@ def test_get_llm_config_infers_openai_compatible_from_generic_base_url(monkeypat
     assert config["provider"] == "openai_compatible"
     assert config["base_url"] == "http://interna/v1"
     assert config["model"] == "modelo-interno"
+
+
+def test_list_available_models_reads_openai_compatible_models(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_BASE_URL", "https://ipeagpt.ipea.gov.br/api/v1")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
+    monkeypatch.setattr(
+        llm_module,
+        "urlopen",
+        lambda request, timeout=0: _FakeResponse('{"data":[{"id":"gpt-4o-mini"},{"id":"gpt-4.1"}]}'),
+    )
+
+    result = list_available_models(timeout=5.0)
+
+    assert result["ok"] is True
+    assert result["endpoint"] == "https://ipeagpt.ipea.gov.br/api/v1/models"
+    assert result["available_models"] == ["gpt-4.1", "gpt-4o-mini"]
+    assert result["configured_model_available"] is True
+
+
+def test_list_available_models_reads_ollama_tags(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_MODEL", "qwen3:14b")
+    monkeypatch.setattr(
+        llm_module,
+        "urlopen",
+        lambda request, timeout=0: _FakeResponse('{"models":[{"name":"qwen3:14b"},{"name":"llama3.1:8b"}]}'),
+    )
+
+    result = list_available_models(timeout=5.0)
+
+    assert result["ok"] is True
+    assert result["endpoint"] == "http://localhost:11434/api/tags"
+    assert result["available_models"] == ["llama3.1:8b", "qwen3:14b"]
+    assert result["configured_model_available"] is True
 
 
 def test_get_llm_model_tag_normalizes_openai_model_name():

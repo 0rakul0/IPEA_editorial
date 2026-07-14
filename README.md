@@ -253,6 +253,14 @@ LLM_MODEL=nome-do-modelo
 LLM_API_KEY=token-opcional
 ```
 
+**IpeaGPT / IpeaIA**:
+```env
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://ipeagpt.ipea.gov.br/api/v1
+LLM_MODEL=nome-do-modelo-listado-em-/models
+LLM_API_KEY=token-se-houver
+```
+
 > A chave configurada serve tanto para a CLI quanto para a interface Streamlit. Nao é necessario configurar separadamente.
 
 ### 3. Executar
@@ -419,6 +427,23 @@ LLM_BASE_URL=http://servidor-interno/v1
 LLM_MODEL=nome-do-modelo
 LLM_API_KEY=token-opcional
 ```
+
+### Exemplo IpeaGPT / IpeaIA
+
+```env
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://ipeagpt.ipea.gov.br/api/v1
+LLM_MODEL=nome-do-modelo-listado-em-/models
+LLM_API_KEY=token-se-houver
+```
+
+Para verificar os modelos disponiveis no provider configurado:
+
+```bash
+uv run python scripts/editorial_lab.py preflight
+```
+
+Na interface Streamlit, a sidebar da LLM agora tambem tem o botao `Listar modelos disponiveis`.
 
 ## Testes
 

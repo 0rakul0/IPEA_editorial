@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 
@@ -210,6 +212,88 @@ def get_runtime_settings() -> dict[str, object]:
         "timeout_seconds": get_llm_timeout_seconds(),
         "retry": get_llm_retry_config(),
     }
+
+
+def list_available_models(
+    config: dict[str, str] | None = None,
+    *,
+    timeout: float | None = None,
+) -> dict[str, object]:
+    """Lists models exposed by the configured provider when supported."""
+    current = config or get_llm_config()
+    provider = (current.get("provider") or "").strip().lower()
+    model = (current.get("model") or "").strip()
+    base_url = (current.get("base_url") or "").strip()
+    api_key = (current.get("api_key") or "").strip()
+    effective_timeout = timeout if timeout is not None else get_llm_timeout_seconds()
+
+    result: dict[str, object] = {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "available_models": [],
+        "ok": False,
+    }
+
+    try:
+        if provider == "ollama":
+            root_url = (base_url or DEFAULT_OLLAMA_BASE_URL).removesuffix("/v1").rstrip("/")
+            endpoint = f"{root_url}/api/tags"
+            with urlopen(Request(endpoint), timeout=effective_timeout) as response:
+                payload = response.read().decode("utf-8")
+            import json
+
+            data = json.loads(payload)
+            names = sorted(
+                {
+                    str(item.get("name", "")).strip()
+                    for item in data.get("models", [])
+                    if isinstance(item, dict) and str(item.get("name", "")).strip()
+                }
+            )
+        else:
+            endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/models"
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            with urlopen(Request(endpoint, headers=headers), timeout=effective_timeout) as response:
+                payload = response.read().decode("utf-8")
+            import json
+
+            data = json.loads(payload)
+            names_set: set[str] = set()
+            if isinstance(data, dict):
+                for item in data.get("data", []):
+                    if isinstance(item, dict):
+                        candidate = str(item.get("id") or item.get("name") or "").strip()
+                        if candidate:
+                            names_set.add(candidate)
+                for item in data.get("models", []):
+                    if isinstance(item, dict):
+                        candidate = str(item.get("id") or item.get("name") or "").strip()
+                        if candidate:
+                            names_set.add(candidate)
+                    elif isinstance(item, str) and item.strip():
+                        names_set.add(item.strip())
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        candidate = str(item.get("id") or item.get("name") or "").strip()
+                        if candidate:
+                            names_set.add(candidate)
+                    elif isinstance(item, str) and item.strip():
+                        names_set.add(item.strip())
+            names = sorted(names_set)
+
+        result["endpoint"] = endpoint
+        result["available_models"] = names
+        result["ok"] = True
+        if model:
+            result["configured_model_available"] = model in names or f"{model}:latest" in names
+        return result
+    except HTTPError as exc:
+        result["error"] = f"HTTP {exc.code}: autenticação ou endpoint inválido."
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        result["error"] = f"Conexão falhou: {exc}"
+    return result
 
 
 def get_chat_model():

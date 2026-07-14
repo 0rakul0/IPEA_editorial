@@ -757,7 +757,7 @@ def find_project_root(explicit: Path | None) -> Path:
 def preflight(args: argparse.Namespace) -> int:
     root = find_project_root(args.project_root)
     sys.path.insert(0, str(root / "src"))
-    from editorial_docx.llm import get_llm_config
+    from editorial_docx.llm import get_llm_config, list_available_models
 
     config = get_llm_config()
     provider = config.get("provider", "")
@@ -777,10 +777,14 @@ def preflight(args: argparse.Namespace) -> int:
             if not result["ok"]:
                 result["error"] = f"Modelo não instalado no Ollama: {model}"
         else:
-            endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/models"
-            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            with urlopen(Request(endpoint, headers=headers), timeout=args.timeout) as response:
-                result["ok"] = 200 <= response.status < 300
+            models_result = list_available_models(config, timeout=args.timeout)
+            result["endpoint"] = models_result.get("endpoint", "")
+            result["available_models"] = models_result.get("available_models", [])
+            result["ok"] = bool(models_result.get("ok"))
+            if "configured_model_available" in models_result:
+                result["configured_model_available"] = models_result["configured_model_available"]
+            if not result["ok"] and models_result.get("error"):
+                result["error"] = str(models_result["error"])
             if not api_key and provider == "openai":
                 result["ok"] = False
                 result["error"] = "Chave da OpenAI ausente."
