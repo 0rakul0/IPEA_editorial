@@ -59,6 +59,37 @@ def _infer_provider() -> str:
     return "openai"
 
 
+def _build_candidate_provider_order() -> list[str]:
+    """Builds the ordered provider list, preferring OpenAI when available."""
+    explicit_provider = _read_env("LLM_PROVIDER").lower()
+    ordered: list[str] = []
+
+    if _has_env("OPENAI_API_KEY"):
+        ordered.append("openai")
+
+    if explicit_provider:
+        ordered.append(explicit_provider)
+    else:
+        inferred_provider = _infer_provider()
+        if inferred_provider != "openai":
+            ordered.append(inferred_provider)
+
+    if _has_env("LLM_BASE_URL") and "openai_compatible" not in ordered:
+        ordered.append("openai_compatible")
+    if _has_env("OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_API_KEY") and "ollama" not in ordered:
+        ordered.append("ollama")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for provider in ordered:
+        normalized = (provider or "").strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
 def _build_provider_config(provider: str) -> dict[str, str]:
     """Builds the effective configuration for one provider family."""
     provider = (provider or "").strip().lower()
@@ -81,9 +112,9 @@ def _build_provider_config(provider: str) -> dict[str, str]:
 
     return {
         "provider": "openai",
-        "model": _read_env("LLM_MODEL", "OPENAI_MODEL", default=DEFAULT_OPENAI_MODEL),
-        "base_url": _read_env("LLM_BASE_URL", "OPENAI_BASE_URL"),
-        "api_key": _read_env("LLM_API_KEY", "OPENAI_API_KEY"),
+        "model": _read_env("OPENAI_MODEL", default=DEFAULT_OPENAI_MODEL),
+        "base_url": _read_env("OPENAI_BASE_URL"),
+        "api_key": _read_env("OPENAI_API_KEY", "LLM_API_KEY"),
     }
 
 
@@ -102,12 +133,12 @@ def _is_config_usable(config: dict[str, str]) -> bool:
 def get_llm_candidate_configs() -> list[dict[str, str]]:
     """Returns the ordered list of usable provider configurations."""
     _load_env()
-
-    preferred_provider = _infer_provider()
-    config = _build_provider_config(preferred_provider)
-    if _is_config_usable(config):
-        return [config]
-    return []
+    configs: list[dict[str, str]] = []
+    for provider in _build_candidate_provider_order():
+        config = _build_provider_config(provider)
+        if _is_config_usable(config):
+            configs.append(config)
+    return configs
 
 
 def get_llm_config() -> dict[str, str]:
@@ -159,7 +190,7 @@ def get_deterministic_mode() -> bool:
 
 def get_llm_disable_fallback() -> bool:
     """Returns whether automatic provider fallback is disabled."""
-    return True
+    return len(get_llm_candidate_configs()) <= 1
 
 
 def get_llm_seed() -> int | None:

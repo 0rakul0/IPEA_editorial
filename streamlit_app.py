@@ -16,6 +16,11 @@ from typing import Callable
 
 import streamlit as st
 
+from paginas import (
+    render_diagnostico_tab,
+    render_erros_encontrados_tab,
+    render_grounding_externo_tab,
+)
 from src.editorial_docx.config import build_output_paths
 from src.editorial_docx.docx_utils import apply_comments_to_docx
 from src.editorial_docx.document_loader import load_document, load_normalized_document
@@ -901,8 +906,6 @@ elif uploaded_normalized is not None:
         _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
         st.session_state.normalized_json_path = normalized_path
 
-col_diag, col_comments = st.columns([1.05, 1.35], gap="large")
-
 if st.session_state.pending_run and st.session_state.paragraphs:
     run = st.session_state.pending_run
     st.session_state.pending_run = None
@@ -1123,8 +1126,6 @@ elif st.session_state.pending_grounding and not st.session_state.paragraphs:
 rows = _build_rows()
 report_json_path = None
 report_json_text = None
-diagnostics_json_name = None
-diagnostics_json_text = None
 docx_path = None
 docx_bytes = None
 
@@ -1134,220 +1135,28 @@ if rows:
     report = _build_correction_report(rows)
     export_comments = _build_export_comments(report)
     report_json_path, report_json_text, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
-    diagnostics_json_name = f"{report_json_path.stem}.diagnostics.json"
-    diagnostics_json_text = json.dumps(_build_diagnostics_payload(export_comments), ensure_ascii=False, indent=2)
 elif st.session_state.comments:
     report = _build_correction_report(_build_rows())
     export_comments = st.session_state.comments
     report_json_path, report_json_text, docx_path, docx_bytes = _persist_review_outputs(report, export_comments)
-    diagnostics_json_name = f"{report_json_path.stem}.diagnostics.json"
-    diagnostics_json_text = json.dumps(_build_diagnostics_payload(export_comments), ensure_ascii=False, indent=2)
 
-with col_diag:
-    st.subheader("Diagnóstico")
+tab_diag, tab_comments, tab_grounding = st.tabs(["Diagnóstico", "Erros encontrados", "Grounding externo"])
 
-    if not st.session_state.paragraphs:
-        st.info("Carregue um documento e use os botões da barra lateral para rodar os agentes.")
-    elif not st.session_state.comments:
-        st.info("Documento carregado. Rode os agentes na barra lateral para gerar o diagnóstico editorial.")
-    else:
-        st.metric("Comentários gerados", len(st.session_state.comments))
+with tab_diag:
+    render_diagnostico_tab(
+        docx_path=docx_path,
+        docx_bytes=docx_bytes,
+        report_json_path=report_json_path,
+        report_json_text=report_json_text,
+    )
 
-        if docx_path and docx_bytes is not None:
-            st.download_button(
-                label="Baixar DOCX comentado",
-                data=docx_bytes,
-                file_name=docx_path.name,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
+with tab_comments:
+    render_erros_encontrados_tab(
+        rows=rows,
+        render_target_excerpt=_render_target_excerpt,
+    )
 
-        if report_json_path:
-            st.download_button(
-                label="Baixar relatório JSON",
-                data=report_json_text or Path(report_json_path).read_text(encoding="utf-8"),
-                file_name=Path(report_json_path).name,
-                mime="application/json",
-                use_container_width=True,
-            )
-
-    st.divider()
-    st.subheader("Grounding Externo")
-
-    grounding_payload = _build_grounding_payload()
-    grounding_result = st.session_state.grounding_result
-
-    if not st.session_state.paragraphs:
-        st.info("Carregue um documento para buscar literatura recente e comparar com o manuscrito.")
-    elif st.session_state.grounding_error:
-        st.error(st.session_state.grounding_error)
-    elif grounding_result is None:
-        st.info("Use o botão da barra lateral para rodar a camada opcional de grounding externo.")
-    else:
-        metric_a, metric_b, metric_c = st.columns(3)
-        metric_a.metric("Consultas", len(grounding_result.queries))
-        metric_b.metric("Trabalhos", len(grounding_result.works))
-        metric_c.metric("LLM usada", "Sim" if grounding_result.llm_used else "Não")
-
-        if grounding_payload is not None:
-            grounding_json_name = f"{st.session_state.source_name}_grounding_externo.json"
-            st.download_button(
-                label="Baixar grounding JSON",
-                data=json.dumps(grounding_payload, ensure_ascii=False, indent=2),
-                file_name=grounding_json_name,
-                mime="application/json",
-                use_container_width=True,
-            )
-
-        if grounding_result.warnings:
-            for warning in grounding_result.warnings:
-                st.warning(warning)
-
-        st.markdown("**Síntese do manuscrito**")
-        st.write(grounding_result.manuscript_summary or "Síntese indisponível.")
-
-        st.markdown("**Estado da arte relevante**")
-        st.write(grounding_result.state_of_art_summary or "Síntese indisponível.")
-
-        st.markdown("**Comparação com o manuscrito**")
-        st.write(grounding_result.manuscript_comparison or "Comparação indisponível.")
-
-        if st.session_state.grounding_logs:
-            with st.expander("Log da execução", expanded=False):
-                st.markdown("\n".join(st.session_state.grounding_logs))
-
-        if grounding_result.queries:
-            with st.expander("Consultas geradas", expanded=False):
-                for idx, query in enumerate(grounding_result.queries, start=1):
-                    st.markdown(f"**{idx}.** `{query.text}`")
-                    if query.rationale:
-                        st.caption(query.rationale)
-                    st.caption(f"Origem: {query.source}")
-
-        if grounding_result.works:
-            with st.expander("Literatura recuperada", expanded=False):
-                for idx, work in enumerate(grounding_result.works, start=1):
-                    year = f" ({work.publication_year})" if work.publication_year else ""
-                    venue = f" | {work.venue}" if work.venue else ""
-                    st.markdown(f"**{idx}. {work.title}{year}**")
-                    st.caption(
-                        f"Relevância: {work.relevance_score:.2f} | Citações: {work.cited_by_count}{venue}"
-                    )
-                    if work.authors:
-                        st.write("Autores:", ", ".join(work.authors))
-                    if work.doi:
-                        st.write("DOI:", work.doi)
-                    if work.landing_page_url:
-                        st.markdown(f"[Abrir registro]({work.landing_page_url})")
-                    if work.matched_queries:
-                        st.caption("Consultas relacionadas: " + "; ".join(work.matched_queries))
-                    st.write(work.abstract or "Resumo não disponível.")
-
-with col_comments:
-    st.subheader("Erros Encontrados")
-
-    if not rows:
-        st.info("Os comentários dos agentes vão aparecer aqui depois da execução.")
-    else:
-        agent_options = sorted({row["agente"] for row in rows})
-        category_options = sorted({row["categoria"] for row in rows})
-        filter_a, filter_b = st.columns(2)
-        with filter_a:
-            selected_agents = st.multiselect(
-                "Filtrar por agente",
-                options=agent_options,
-                default=[],
-                key="diagnostic_agent_filter",
-            )
-        with filter_b:
-            selected_categories = st.multiselect(
-                "Filtrar por categoria",
-                options=category_options,
-                default=[],
-                key="diagnostic_category_filter",
-            )
-
-        visible_rows = [
-            row
-            for row in rows
-            if (not selected_agents or row["agente"] in selected_agents)
-            and (not selected_categories or row["categoria"] in selected_categories)
-        ]
-
-        summary_a, summary_b, summary_c = st.columns(3)
-        summary_a.metric("Itens filtrados", len(visible_rows))
-        summary_b.metric("Agentes no filtro", len({row["agente"] for row in visible_rows}) if visible_rows else 0)
-        summary_c.metric("Categorias no filtro", len({row["categoria"] for row in visible_rows}) if visible_rows else 0)
-
-        if not visible_rows:
-            st.info("Nenhum comentário corresponde aos filtros atuais.")
-        else:
-            for row in visible_rows:
-                title = (
-                    f"[{row['agente']}] {row['categoria']}"
-                    + (f" | trecho {row['indice_trecho']}" if isinstance(row["indice_trecho"], int) else "")
-                )
-                with st.expander(title, expanded=False):
-                    state_key = str(row["comment_idx"])
-                    state = st.session_state.correction_state.setdefault(
-                        state_key,
-                        {
-                            "status": "pendente",
-                            "final_text": row["como_deve_ficar"] or row["trecho_com_problema"] or "",
-                            "observacao": "",
-                        },
-                    )
-                    status_label = {
-                        "pendente": "Pendente",
-                        "resolvido": "Aceito",
-                        "rejeitado": "Rejeitado",
-                    }.get(state.get("status", "pendente"), state.get("status", "pendente"))
-                    st.caption(f"Status: {status_label}")
-
-                    st.markdown(f"**Referência:** {row['referencia']}")
-                    st.markdown(f"**Comentário:** {row['comentario']}")
-                    st.markdown("**Trecho com problema**")
-                    st.code(row["trecho_com_problema"] or "(não informado)", language="text")
-                    st.markdown("**Sugestão de correção**")
-                    st.code(row["como_deve_ficar"] or "(não informado)", language="text")
-
-                    final_text_key = f"final_text_{state_key}"
-                    if final_text_key not in st.session_state:
-                        st.session_state[final_text_key] = state.get("final_text", "")
-                    final_text = st.text_area(
-                        "Correção que irá para o documento",
-                        key=final_text_key,
-                        placeholder="Edite aqui o texto final a aplicar no documento.",
-                    )
-                    state["final_text"] = final_text
-
-                    note_key = f"review_note_{state_key}"
-                    if note_key not in st.session_state:
-                        st.session_state[note_key] = state.get("observacao", "")
-                    note = st.text_area(
-                        "Comentário/correção do usuário",
-                        key=note_key,
-                        placeholder="Escreva aqui a correção que deve ser aplicada no documento.",
-                    )
-                    state["observacao"] = note
-                    if note.strip() and state.get("status") != "rejeitado":
-                        state["final_text"] = note
-                        state["status"] = "resolvido"
-
-                    action_accept, action_reject = st.columns(2)
-                    with action_accept:
-                        if st.button("Aceitar comentário", key=f"accept_comment_{state_key}", use_container_width=True):
-                            state["status"] = "resolvido"
-                            state["final_text"] = note.strip() or final_text or row["como_deve_ficar"] or row["trecho_com_problema"] or ""
-                            state["observacao"] = note
-                            st.rerun()
-                    with action_reject:
-                        if st.button("Rejeitar comentário", key=f"reject_comment_{state_key}", use_container_width=True):
-                            state["status"] = "rejeitado"
-                            state["final_text"] = ""
-                            state["observacao"] = note
-                            st.rerun()
-
-                    pidx = row["indice_trecho"]
-                    if isinstance(pidx, int) and 0 <= pidx < len(st.session_state.paragraphs):
-                        _render_target_excerpt(st.session_state.paragraphs[pidx], row["trecho_com_problema"])
+with tab_grounding:
+    render_grounding_externo_tab(
+        grounding_payload=_build_grounding_payload(),
+    )
