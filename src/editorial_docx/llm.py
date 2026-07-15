@@ -61,10 +61,13 @@ def _infer_provider() -> str:
 
 def _build_candidate_provider_order() -> list[str]:
     """Builds the ordered provider list, preferring OpenAI when available."""
+    primary_provider = _read_env("LLM_PRIMARY_PROVIDER").lower()
     explicit_provider = _read_env("LLM_PROVIDER").lower()
     ordered: list[str] = []
 
-    if _has_env("OPENAI_API_KEY"):
+    if primary_provider:
+        ordered.append(primary_provider)
+    elif _has_env("OPENAI_API_KEY"):
         ordered.append("openai")
 
     if explicit_provider:
