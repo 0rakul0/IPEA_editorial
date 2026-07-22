@@ -5,7 +5,7 @@ param(
     [string]$RepoRoot = $PSScriptRoot
 )
 
-$source = Join-Path $RepoRoot ".opencode\skills\$SkillName"
+$source = Join-Path $RepoRoot ".agents\skills\$SkillName"
 if (-not (Test-Path -LiteralPath "$source\SKILL.md")) {
     Write-Host "SKILL.md nao encontrado em: $source" -ForegroundColor Red
     exit 1
@@ -20,10 +20,13 @@ Copy-Item -Recurse -Force -Path $source -Destination $tmpSource
 
 $paths = @()
 if ($Scope -eq "user") {
+    $paths += Join-Path $HOME ".codex\skills"
     $paths += Join-Path $HOME ".config\opencode\skills"
     $paths += Join-Path $HOME ".claude\skills"
     $paths += Join-Path $HOME ".agents\skills"
 } else {
+    # Codex descobre skills locais em .agents/skills; nao e necessario criar
+    # uma pasta .codex dentro do repositorio.
     $paths += Join-Path $RepoRoot ".opencode\skills"
     $paths += Join-Path $RepoRoot ".claude\skills"
     $paths += Join-Path $RepoRoot ".agents\skills"

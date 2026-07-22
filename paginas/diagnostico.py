@@ -9,8 +9,6 @@ def render_diagnostico_tab(
     *,
     docx_path: Path | None,
     docx_bytes: bytes | None,
-    report_json_path: Path | None,
-    report_json_text: str | None,
 ) -> None:
     """Renderiza a aba de diagnostico editorial."""
     st.subheader("Diagnostico")
@@ -31,14 +29,5 @@ def render_diagnostico_tab(
             data=docx_bytes,
             file_name=docx_path.name,
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True,
-        )
-
-    if report_json_path:
-        st.download_button(
-            label="Baixar relatorio JSON",
-            data=report_json_text or Path(report_json_path).read_text(encoding="utf-8"),
-            file_name=Path(report_json_path).name,
-            mime="application/json",
             use_container_width=True,
         )

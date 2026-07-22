@@ -4,7 +4,7 @@ set -euo pipefail
 SCOPE="${1:-repo}"
 SKILL_NAME="revisao-editorial-ipea"
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-SOURCE="$REPO_ROOT/.opencode/skills/$SKILL_NAME"
+SOURCE="$REPO_ROOT/.agents/skills/$SKILL_NAME"
 
 if [ ! -f "$SOURCE/SKILL.md" ]; then
     echo "SKILL.md not found at: $SOURCE" >&2
@@ -19,11 +19,14 @@ cp -R "$SOURCE" "$TMP_SOURCE"
 declare -a BASES
 if [ "$SCOPE" = "user" ]; then
     BASES=(
+        "$HOME/.codex/skills"
         "$HOME/.config/opencode/skills"
         "$HOME/.claude/skills"
         "$HOME/.agents/skills"
     )
 else
+    # Codex descobre skills locais em .agents/skills; nao e necessario criar
+    # uma pasta .codex dentro do repositorio.
     BASES=(
         "$REPO_ROOT/.opencode/skills"
         "$REPO_ROOT/.claude/skills"

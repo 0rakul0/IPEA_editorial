@@ -23,9 +23,9 @@ from paginas import (
 )
 from src.editorial_docx.config import build_output_paths
 from src.editorial_docx.docx_utils import apply_comments_to_docx
-from src.editorial_docx.document_loader import load_document, load_normalized_document
+from src.editorial_docx.document_loader import load_document
 from src.editorial_docx.graph_chat import run_conversation
-from src.editorial_docx.literature_grounding import literature_grounding_to_dict, run_literature_grounding
+from src.editorial_docx.literature_grounding import run_literature_grounding
 from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtime_settings
 from src.editorial_docx.models import AgentComment, ExecutionTrace, VerificationSummary, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
@@ -511,23 +511,6 @@ def _build_diagnostics_payload(export_comments: list[AgentComment]) -> dict[str,
     }
 
 
-def _build_grounding_payload() -> dict[str, object] | None:
-    """Serializes the latest grounding run for export."""
-    grounding_result = st.session_state.grounding_result
-    if grounding_result is None:
-        return None
-    runtime = get_runtime_settings()
-    return {
-        "source_name": st.session_state.source_name,
-        "provider": "openalex",
-        "runtime": runtime,
-        "recent_years": st.session_state.grounding_recent_years,
-        "max_works": st.session_state.grounding_max_works,
-        "progress_logs": st.session_state.grounding_logs,
-        "grounding": literature_grounding_to_dict(grounding_result),
-    }
-
-
 def _persist_review_outputs(report_rows: list[dict], export_comments: list[AgentComment]) -> tuple[Path, str, Path | None, bytes | None]:
     """Handles persist review outputs."""
     source_for_outputs = (
@@ -809,7 +792,7 @@ def _store_loaded_document(loaded, *, file_fingerprint: str | None, file_bytes: 
     st.session_state.grounding_error = ""
 
 
-top_col_a, top_col_b, top_col_c, top_col_d = st.columns(4, gap="small")
+top_col_a, top_col_c, top_col_d = st.columns(3, gap="small")
 
 with top_col_a:
     with st.container(border=True):
@@ -817,15 +800,6 @@ with top_col_a:
         uploaded = st.file_uploader(
             "Carregar documento (.docx ou .pdf)",
             type=["docx", "pdf"],
-            label_visibility="collapsed",
-        )
-
-with top_col_b:
-    with st.container(border=True):
-        st.markdown('<div class="top-grid-label">Documento normalizado</div>', unsafe_allow_html=True)
-        uploaded_normalized = st.file_uploader(
-            "Carregar normalized_document.json",
-            type=["json"],
             label_visibility="collapsed",
         )
 
@@ -854,17 +828,6 @@ if uploaded is not None:
         loaded = load_document(doc_path)
         _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=file_bytes, doc_path=doc_path)
 
-elif uploaded_normalized is not None:
-    file_bytes = uploaded_normalized.getvalue()
-    file_fingerprint = hashlib.sha256(file_bytes).hexdigest()
-    if st.session_state.doc_fingerprint != file_fingerprint:
-        normalized_path = _session_work_dir() / uploaded_normalized.name
-        normalized_path.write_bytes(file_bytes)
-        loaded = load_normalized_document(normalized_path)
-        st.session_state.doc_profile = "GENERIC"
-        _store_loaded_document(loaded, file_fingerprint=file_fingerprint, file_bytes=b"", doc_path=None)
-        st.session_state.normalized_json_path = normalized_path
-
 if st.session_state.pending_run and st.session_state.paragraphs:
     run = st.session_state.pending_run
     st.session_state.pending_run = None
@@ -875,62 +838,15 @@ if st.session_state.pending_run and st.session_state.paragraphs:
         "user_comments": list(st.session_state.user_comments),
         "profile_key": st.session_state.doc_profile,
     }
-    progress_header = st.empty()
-    progress_bar = st.progress(0, text="Preparando execução dos agentes...")
-    agent_progress_host = st.empty()
-    progress_box = st.empty()
-    progress_lines: list[str] = []
-    with agent_progress_host.container():
-        agent_slots = {agent: st.empty() for agent in run["agents"]}
-    agent_state = {
-        agent: {
-            "batch_idx": 0,
-            "batch_total": 0,
-            "new_count": 0,
-            "comments_total": 0,
-            "status": "aguardando",
-            "done": False,
-        }
-        for agent in run["agents"]
-    }
+    progress_bar = st.progress(0, text="Preparando a revisão...")
+    agent_progress = {agent: 0.0 for agent in run["agents"]}
 
-    def _render_parallel_progress() -> None:
-        """Handles render parallel progress."""
-        total_agents = max(len(run["agents"]), 1)
-        accumulated_ratio = 0.0
-        completed_agents = 0
-
-        for agent in run["agents"]:
-            state = agent_state[agent]
-            if state["done"]:
-                completed_agents += 1
-            if state["batch_total"] > 0:
-                accumulated_ratio += min(state["batch_idx"] / max(state["batch_total"], 1), 1.0)
-            elif state["done"]:
-                accumulated_ratio += 1.0
-
-            label = AGENT_LABELS.get(agent, agent)
-            if state["batch_total"] > 0:
-                pct = int(min(state["batch_idx"] / max(state["batch_total"], 1), 1.0) * 100)
-                subtitle = (
-                    f"Lote {state['batch_idx']}/{state['batch_total']} | "
-                    f"+{state['new_count']} comentário(s) | total local {state['comments_total']}"
-                )
-            else:
-                pct = 100 if state["done"] else 0
-                subtitle = f"Status: {state['status']}"
-
-            status = state["status"]
-            suffix = f" | {status}" if status else ""
-            with agent_slots[agent].container():
-                st.markdown(f"**{label}**")
-                st.progress(pct, text=f"{subtitle}{suffix}")
-
-        overall_pct = int((accumulated_ratio / total_agents) * 100)
-        progress_header.info(f"Executando revisão: {completed_agents}/{total_agents} agente(s) concluído(s).")
-        progress_bar.progress(overall_pct, text=f"Progresso geral: {overall_pct}%")
-        if progress_lines:
-            progress_box.markdown("**Progresso da revisão:**\n" + "\n".join(progress_lines[-14:]))
+    def _update_review_loader() -> None:
+        """Atualiza somente o carregador geral da revisão."""
+        total_agents = max(len(agent_progress), 1)
+        completed_ratio = sum(agent_progress.values()) / total_agents
+        percentage = max(5, min(95, int(completed_ratio * 95)))
+        progress_bar.progress(percentage, text="Analisando o documento...")
 
     event_queue = Queue()
     outcome: dict[str, object] = {"done": False}
@@ -972,61 +888,24 @@ if st.session_state.pending_run and st.session_state.paragraphs:
                     if event.get("type") != "progress":
                         continue
                     agent = str(event["agent"])
-                    state = agent_state.setdefault(
-                        agent,
-                        {
-                            "batch_idx": 0,
-                            "batch_total": 0,
-                            "new_count": 0,
-                            "comments_total": 0,
-                            "status": "aguardando",
-                            "done": False,
-                        },
-                    )
-                    state["batch_idx"] = int(event["batch_idx"])
-                    state["batch_total"] = int(event["batch_total"])
-                    state["new_count"] = int(event["new_count"])
-                    state["comments_total"] += int(event["new_count"])
-                    state["status"] = str(event.get("status") or "em execução")
-                    state["done"] = state["batch_total"] > 0 and state["batch_idx"] >= state["batch_total"]
-                    progress_lines.append(str(event["line"]))
+                    batch_total = max(int(event["batch_total"]), 1)
+                    agent_progress[agent] = min(int(event["batch_idx"]) / batch_total, 1.0)
                 if drained:
-                    _render_parallel_progress()
+                    _update_review_loader()
                 time.sleep(0.05)
             worker.join()
-            _render_parallel_progress()
+            for agent in agent_progress:
+                agent_progress[agent] = 1.0
+            _update_review_loader()
             if "error" in outcome:
                 raise outcome["error"]
             result = outcome["result"]
             logs = outcome.get("logs", [])
     except Exception as exc:
-        progress_header.error("A revisão foi interrompida por uma falha inesperada.")
         progress_bar.empty()
-        agent_progress_host.empty()
-        progress_box.empty()
         st.error(f"Falha ao executar a revisão: {exc}")
         st.caption("Verifique a configuração da LLM, especialmente provider, base URL e modelo.")
     else:
-        if getattr(result, "trace", None) is not None:
-            for agent_trace in result.trace.agents:
-                state = agent_state.setdefault(
-                    agent_trace.agent,
-                    {
-                        "batch_idx": 0,
-                        "batch_total": 0,
-                        "new_count": 0,
-                        "comments_total": 0,
-                        "status": "aguardando",
-                        "done": False,
-                    },
-                )
-                total_batches = len(agent_trace.batches)
-                state["batch_total"] = max(state["batch_total"], total_batches)
-                state["batch_idx"] = total_batches if total_batches else state["batch_idx"]
-                state["status"] = agent_trace.failure_status or "concluído"
-                state["done"] = True
-        _render_parallel_progress()
-        progress_header.success("Revisão concluída.")
         progress_bar.progress(100, text="Processamento completo")
 
         st.session_state.review_question = run["question"]
@@ -1053,13 +932,6 @@ elif st.session_state.pending_run and not st.session_state.paragraphs:
 if st.session_state.pending_grounding and st.session_state.paragraphs:
     grounding_request = st.session_state.pending_grounding
     st.session_state.pending_grounding = None
-    grounding_logs: list[str] = []
-    grounding_status = st.empty()
-
-    def _on_grounding_status(message: str) -> None:
-        timestamp = time.strftime("%H:%M:%S")
-        grounding_logs.append(f"- `{timestamp}` {message}")
-        grounding_status.markdown("**Grounding externo em andamento**\n" + "\n".join(grounding_logs[-8:]))
 
     with st.spinner("Buscando literatura recente e comparando com o manuscrito..."):
         try:
@@ -1069,15 +941,13 @@ if st.session_state.pending_grounding and st.session_state.paragraphs:
                 profile_key=st.session_state.doc_profile,
                 recent_years=int(grounding_request.get("recent_years", 5)),
                 max_works=int(grounding_request.get("max_works", 8)),
-                on_status=_on_grounding_status,
             )
             st.session_state.grounding_error = ""
         except Exception as exc:  # pragma: no cover - UI surface
             st.session_state.grounding_result = None
             st.session_state.grounding_error = str(exc)
         finally:
-            st.session_state.grounding_logs = grounding_logs
-    grounding_status.empty()
+            st.session_state.grounding_logs = []
 elif st.session_state.pending_grounding and not st.session_state.paragraphs:
     st.warning("Carregue um documento antes de rodar o grounding externo.")
     st.session_state.pending_grounding = None
@@ -1105,8 +975,6 @@ with tab_diag:
     render_diagnostico_tab(
         docx_path=docx_path,
         docx_bytes=docx_bytes,
-        report_json_path=report_json_path,
-        report_json_text=report_json_text,
     )
 
 with tab_comments:
@@ -1116,6 +984,4 @@ with tab_comments:
     )
 
 with tab_grounding:
-    render_grounding_externo_tab(
-        grounding_payload=_build_grounding_payload(),
-    )
+    render_grounding_externo_tab()

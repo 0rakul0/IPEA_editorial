@@ -321,13 +321,19 @@ Comandos auxiliares:
 
 ### AI Skill (OpenCode / Claude Code / Codex)
 
-O projeto inclui uma skill para assistentes de IA que reconhece os três modos de acesso e executa o pipeline automaticamente. Instalação:
+O projeto inclui uma skill para assistentes de IA que reconhece os três modos de acesso e executa o pipeline automaticamente.
+
+A fonte canônica é `.agents/skills/revisao-editorial-ipea/SKILL.md`. Os arquivos em `.claude/` e `.opencode/` são espelhos para descoberta automática nesses assistentes e devem permanecer idênticos à fonte canônica.
+
+Para usar a skill somente neste clone, não é necessário instalar nada: o Codex a descobre em `.agents/skills/`.
+
+Para instalar globalmente a partir de um clone do repositório:
 
 ```powershell
 # Escopo repo (apenas neste diretorio)
 .\install.ps1 -Scope repo
 
-# Escopo user (global, disponivel em qualquer projeto)
+# Escopo user (global, disponível em qualquer projeto e agente)
 .\install.ps1 -Scope user
 ```
 
@@ -337,15 +343,23 @@ bash install.sh repo
 bash install.sh user
 ```
 
-A skill é instalada nos paths:
+Para instalar somente a skill global do Codex direto do GitHub, sem depender de um caminho local:
+
+```powershell
+python C:\Users\<usuario>\.codex\skills\.system\skill-installer\scripts\install-skill-from-github.py `
+  --repo 0rakul0/IPEA_editorial `
+  --path .agents/skills/revisao-editorial-ipea
+```
+
+A instalação por `install.ps1`/`install.sh` usa os paths:
 
 | Path | Ferramenta |
 |---|---|
+| `.agents/skills/` (no repositório) ou `~/.codex/skills/` (global) | OpenAI Codex |
 | `.opencode/skills/` ou `~/.config/opencode/skills/` | OpenCode |
 | `.claude/skills/` ou `~/.claude/skills/` | Claude Code |
-| `.agents/skills/` ou `~/.agents/skills/` | OpenAI Codex |
 
-A fonte canonica da skill esta em `.opencode/skills/revisao-editorial-ipea/SKILL.md`.
+Abra uma nova tarefa depois da instalação global para que o Codex recarregue a lista de skills. A instalação global disponibiliza as instruções; para executar o pipeline, a tarefa ainda deve estar neste repositório (ou em outro ambiente com o pacote instalado).
 
 ## Saidas
 
@@ -444,6 +458,67 @@ uv run python scripts/editorial_lab.py preflight
 ```
 
 Na interface Streamlit, a sidebar da LLM agora tambem tem o botao `Listar modelos disponiveis`.
+
+## Calibragem da skill e melhoria dos prompts
+
+A skill não retreina automaticamente o modelo de linguagem. Neste projeto, “aprender” significa extrair evidências das revisões humanas, transformá-las em ajustes verificáveis de prompts, escopos, heurísticas e validações, e medir o efeito em documentos que não participaram da calibragem.
+
+O inventário atual dos documentos reservados está em [CONJUNTO_TESTE_HOLDOUT.md](docs/CONJUNTO_TESTE_HOLDOUT.md). Há nove candidatos executáveis para avaliação qualitativa, além de dois itens sem `original.docx`, que ainda não podem ser processados pelo pipeline.
+
+### 1. Preparar um caso de aprendizado
+
+Cada pasta precisa conter, no mínimo:
+
+- `<nome> (original).docx`;
+- `<nome> (para diagramar).docx` ou `<nome> (sem marcas).docx`.
+
+Arquivos `(com marcas).docx` e o PDF final são opcionais, mas fortalecem a evidência sobre as correções humanas e sua confirmação na versão publicada.
+
+### 2. Extrair padrões de uma pasta
+
+```powershell
+uv run python scripts/editorial_lab.py learn `
+  "<pasta-editorial>" `
+  --out-dir ".tmp/aprendizado/<nome-do-caso>"
+```
+
+O comando gera `editorial_knowledge.json` e `editorial_knowledge.md`. Priorize exemplos com estado `confirmed_final`: eles representam alterações humanas confirmadas na versão final. Casos `observed_change` servem como indício; `unresolved_or_not_applied` não deve virar regra sem revisão humana.
+
+Para processar várias pastas elegíveis de uma única raiz:
+
+```powershell
+uv run python scripts/editorial_lab.py batch-learn `
+  "<pasta-raiz>" `
+  --out-dir ".tmp/aprendizado/lote" `
+  --workers 4
+```
+
+### 3. Converter evidência em melhoria do sistema
+
+Classifique o padrão antes de alterar o código:
+
+| Tipo de melhoria | Onde alterar |
+|---|---|
+| Instrução editorial ou formato da resposta | `src/editorial_docx/prompts/` |
+| Trecho que cada agente pode analisar | `src/editorial_docx/agents/scopes/` |
+| Regra objetiva e repetível | `src/editorial_docx/agents/heuristics/` |
+| Filtro contra falso positivo | `src/editorial_docx/agents/validation/` |
+| Ordem, deduplicação ou apresentação final | `src/editorial_docx/pipeline/` |
+
+Faça uma alteração pequena por vez. Todo novo prompt deve dizer: o que verificar, quando não comentar, como ancorar o trecho e como formular a correção. Não transforme preferência estilística, hipótese bibliográfica ou reescrita autoral em regra automática.
+
+### 4. Avaliar sem contaminar o aprendizado
+
+Rode o agente em um documento que não foi usado para calibragem e compare o relatório gerado com o conhecimento extraído:
+
+```powershell
+uv run python scripts/editorial_lab.py evaluate `
+  --knowledge ".tmp/aprendizado/<nome-do-caso>/editorial_knowledge.json" `
+  --report "<relatorio-agentes>.json" `
+  --out-dir ".tmp/avaliacao/<nome-do-caso>"
+```
+
+Revise os falsos positivos e as mudanças humanas não cobertas. Só incorpore um novo padrão ao prompt ou à heurística quando ele for recorrente, específico e editorialmente justificável. Em seguida, acrescente um teste de regressão e rode a suíte abaixo.
 
 ## Testes
 

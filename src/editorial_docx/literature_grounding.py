@@ -492,10 +492,8 @@ def _fetch_openalex_works(
     base_url = "https://api.openalex.org/works"
     current_year = datetime.now(UTC).year
     from_year = max(1900, current_year - max(1, recent_years) + 1)
-    token_count = len(_tokenize(query.text))
-    search_parameter = "search.semantic" if token_count >= 8 or len(query.text) >= 80 else "search"
     params = {
-        search_parameter: query.text,
+        "search": query.text,
         "filter": f"from_publication_date:{from_year}-01-01,has_abstract:true,type:!paratext",
         "per_page": str(max(1, min(per_query, 25))),
         "mailto": _read_env("OPENALEX_EMAIL", "OPENALEX_MAILTO"),
@@ -527,6 +525,53 @@ def _fetch_openalex_works(
         if work is not None:
             works.append(work)
     return works, None
+
+
+def _refine_openalex_query_with_llm(
+    query: LiteratureQuery,
+    manuscript_context: dict[str, object],
+) -> tuple[LiteratureQuery | None, bool]:
+    """Reformula uma consulta inválida ou pouco produtiva antes de repeti-la no OpenAlex."""
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "Você simplifica consultas para a API OpenAlex. Retorne APENAS um JSON válido "
+                'no formato {"query":"..."}. A consulta deve ter de 2 a 8 termos, sem frases longas, '
+                "sem operadores, sem aspas e sem inventar conceitos que não estejam no manuscrito.",
+            ),
+            (
+                "human",
+                "Consulta que falhou ou não recuperou trabalhos: {query}\n"
+                "Título do manuscrito: {title}\n"
+                "Palavras-chave: {keywords}\n"
+                "Termos recorrentes: {top_terms}",
+            ),
+        ]
+    )
+    raw, used_llm = _invoke_prompt(
+        prompt,
+        {
+            "query": query.text,
+            "title": str(manuscript_context.get("title") or ""),
+            "keywords": json.dumps(manuscript_context.get("keywords") or [], ensure_ascii=False),
+            "top_terms": json.dumps(manuscript_context.get("top_terms") or [], ensure_ascii=False),
+        },
+    )
+    payload = _extract_json_object(raw or "")
+    refined_text = _normalize_space(str(payload.get("query") or ""))
+    if not used_llm or not _is_query_useful(refined_text):
+        return None, False
+    if refined_text.casefold() == query.text.casefold():
+        return None, False
+    return (
+        LiteratureQuery(
+            text=refined_text[:160],
+            rationale="Consulta simplificada como apoio à recuperação bibliográfica.",
+            source="llm_fallback",
+        ),
+        True,
+    )
 
 
 def _score_work(work: LiteratureWork, manuscript_terms: set[str], query_terms: set[str], recent_years: int) -> float:
@@ -568,6 +613,21 @@ def retrieve_recent_literature(
         if on_status is not None:
             on_status(f"Buscando literatura para: {query.text}")
         works, warning = _fetch_openalex_works(query, recent_years=recent_years, per_query=per_query)
+        if warning or not works:
+            fallback_query, _ = _refine_openalex_query_with_llm(query, manuscript_context)
+            if fallback_query is not None:
+                if on_status is not None:
+                    on_status("Ajustando uma consulta para ampliar a recuperação bibliográfica.")
+                fallback_works, fallback_warning = _fetch_openalex_works(
+                    fallback_query,
+                    recent_years=recent_years,
+                    per_query=per_query,
+                )
+                if fallback_works:
+                    works = fallback_works
+                    warning = None
+                elif fallback_warning:
+                    warning = fallback_warning
         if warning:
             warnings.append(warning)
         query_terms = set(_tokenize(query.text))

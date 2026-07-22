@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
-
 import streamlit as st
 
 
-def render_grounding_externo_tab(*, grounding_payload: dict[str, object] | None) -> None:
+def render_grounding_externo_tab() -> None:
     """Renderiza a aba de grounding externo."""
     st.subheader("Grounding Externo")
 
@@ -23,20 +21,9 @@ def render_grounding_externo_tab(*, grounding_payload: dict[str, object] | None)
         st.info("Use o botao da barra lateral para rodar a camada opcional de grounding externo.")
         return
 
-    metric_a, metric_b, metric_c = st.columns(3)
+    metric_a, metric_b = st.columns(2)
     metric_a.metric("Consultas", len(grounding_result.queries))
     metric_b.metric("Trabalhos", len(grounding_result.works))
-    metric_c.metric("LLM usada", "Sim" if grounding_result.llm_used else "Nao")
-
-    if grounding_payload is not None:
-        grounding_json_name = f"{st.session_state.source_name}_grounding_externo.json"
-        st.download_button(
-            label="Baixar grounding JSON",
-            data=json.dumps(grounding_payload, ensure_ascii=False, indent=2),
-            file_name=grounding_json_name,
-            mime="application/json",
-            use_container_width=True,
-        )
 
     if grounding_result.warnings:
         for warning in grounding_result.warnings:
@@ -50,10 +37,6 @@ def render_grounding_externo_tab(*, grounding_payload: dict[str, object] | None)
 
     st.markdown("**Comparacao com o manuscrito**")
     st.write(grounding_result.manuscript_comparison or "Comparacao indisponivel.")
-
-    if st.session_state.grounding_logs:
-        with st.expander("Log da execucao", expanded=False):
-            st.markdown("\n".join(st.session_state.grounding_logs))
 
     if grounding_result.queries:
         with st.expander("Consultas geradas", expanded=False):
