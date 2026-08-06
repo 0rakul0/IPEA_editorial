@@ -1,0 +1,75 @@
+stages:
+  - test
+  - build
+  - deploy
+  - stop
+
+default:
+  tags:
+    - linux
+
+test:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install --no-cache-dir uv
+    - uv sync --frozen --dev
+    - uv run pytest testes/test_architecture_modular.py testes/test_graph_chat.py -q
+    - uv run python -m compileall streamlit_app.py paginas src/editorial_docx
+
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  needs: [test]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+
+deploy:
+  stage: deploy
+  image:
+    name: bitnami/kubectl:latest
+    entrypoint: [""]
+  needs: [build]
+  environment:
+    name: development
+    url: https://${K8S_INGRESS_HOST}
+    on_stop: stop_app
+  script:
+    - test -n "${KUBE_CONTEXT}"
+    - test -n "${K8S_NAMESPACE}"
+    - test -n "${K8S_INGRESS_HOST}"
+    - test -n "${K8S_TLS_SECRET}"
+    - test -n "${K8S_IMAGE_PULL_SECRET}"
+    - kubectl config use-context "${KUBE_CONTEXT}"
+    - sed -e "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" -e "s|__IMAGE_PULL_SECRET__|${K8S_IMAGE_PULL_SECRET}|g" deployment.yaml > /tmp/deployment.yaml
+    - sed -e "s|__INGRESS_HOST__|${K8S_INGRESS_HOST}|g" -e "s|__TLS_SECRET__|${K8S_TLS_SECRET}|g" ingress.yaml > /tmp/ingress.yaml
+    - kubectl apply --namespace "${K8S_NAMESPACE}" -f /tmp/deployment.yaml
+    - kubectl apply --namespace "${K8S_NAMESPACE}" -f service.yaml
+    - kubectl apply --namespace "${K8S_NAMESPACE}" -f /tmp/ingress.yaml
+    - kubectl rollout status --namespace "${K8S_NAMESPACE}" deployment/ipearev --timeout=5m
+
+stop_app:
+  stage: stop
+  image:
+    name: bitnami/kubectl:latest
+    entrypoint: [""]
+  when: manual
+  environment:
+    name: development
+    action: stop
+  script:
+    - test -n "${KUBE_CONTEXT}"
+    - test -n "${K8S_NAMESPACE}"
+    - test -n "${K8S_INGRESS_HOST}"
+    - test -n "${K8S_TLS_SECRET}"
+    - test -n "${K8S_IMAGE_PULL_SECRET}"
+    - kubectl config use-context "${KUBE_CONTEXT}"
+    - sed -e "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" -e "s|__IMAGE_PULL_SECRET__|${K8S_IMAGE_PULL_SECRET}|g" deployment.yaml > /tmp/deployment.yaml
+    - sed -e "s|__INGRESS_HOST__|${K8S_INGRESS_HOST}|g" -e "s|__TLS_SECRET__|${K8S_TLS_SECRET}|g" ingress.yaml > /tmp/ingress.yaml
+    - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f /tmp/ingress.yaml
+    - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f service.yaml
+    - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f /tmp/deployment.yaml

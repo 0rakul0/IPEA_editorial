@@ -4,6 +4,7 @@ import json
 import inspect
 import hashlib
 import html
+import os
 from queue import Empty, Queue
 import re
 import tempfile
@@ -45,6 +46,11 @@ AGENT_LABELS = {
 
 project_root = Path(__file__).resolve().parent
 env_path = project_root / ".env"
+allow_config_persistence = os.getenv("IPEAREV_ALLOW_CONFIG_PERSISTENCE", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 with st.sidebar:
     st.markdown(
@@ -58,7 +64,10 @@ with st.sidebar:
     )
     llm_config = get_llm_config()
     llm_model_tag = get_llm_model_tag(llm_config)
-    render_configuracao_usuario_section(env_path=env_path)
+    render_configuracao_usuario_section(
+        env_path=env_path,
+        allow_persistence=allow_config_persistence,
+    )
 
     st.divider()
     st.markdown("### Execução")

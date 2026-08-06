@@ -198,6 +198,87 @@ Observacao: aqui as ramificacoes representam produtos derivados do matcher e do 
 
 ## Instalacao
 
+## Execução em contêiner e deploy
+
+O projeto já está organizado para ser enviado diretamente ao projeto GitLab `ipearev/ipearev`:
+
+```text
+.
+├── .gitlab-ci.yml       # testes, build Kaniko e deploy
+├── Dockerfile           # imagem Streamlit de produção
+├── deployment.yaml      # Deployment Kubernetes (template)
+├── service.yaml         # Service Kubernetes
+├── ingress.yaml         # Ingress HTTPS (template)
+├── src/                 # núcleo do pipeline editorial
+├── paginas/             # telas auxiliares da interface Streamlit
+├── streamlit_app.py     # aplicação web
+└── deploy/              # exemplos de Secret e autorização do agente
+```
+
+O projeto inclui uma imagem Docker reprodutível e manifestos Kubernetes na raiz.
+Eles isolam a aplicação da raiz de desenvolvimento e mantêm chaves fora da imagem e do repositório.
+
+Para testar localmente com Docker Desktop, copie `.env.docker.example` para `.env.docker`,
+preencha somente as variáveis do provedor escolhido e execute:
+
+```powershell
+docker compose --env-file .env.docker up --build
+```
+
+Abra `http://localhost:8501`. O contêiner é executado sem privilégios e com o sistema de
+arquivos somente leitura; documentos carregados e saídas da interface permanecem temporários.
+Por isso, em contêiner, a opção **Salvar** credenciais fica desativada; use variáveis de
+ambiente/Secrets do ambiente ou a opção **Usar nesta sessão**.
+
+Para Kubernetes, ajuste a imagem e o host em `deployment.yaml` e `ingress.yaml`.
+Os dois arquivos são templates: `__IMAGE__`,
+`__IMAGE_PULL_SECRET__`, `__INGRESS_HOST__` e `__TLS_SECRET__` são substituídos pelo
+pipeline GitLab, não editados com valores do ambiente. Crie o secret de runtime no namespace
+sem versioná-lo, por exemplo:
+
+```powershell
+kubectl -n <namespace> create secret generic ipearev-runtime `
+  --from-env-file=.env.docker
+kubectl -n <namespace> apply -f deployment.yaml `
+  -f service.yaml `
+  -f ingress.yaml
+```
+
+`deploy/secret.example.yaml` documenta o formato do Secret, mas não deve receber
+valores reais. Antes do deploy, escolha os limites de CPU/memória e a quantidade de réplicas
+de acordo com o tamanho esperado dos documentos e a concorrência do provedor LLM.
+
+### CI/CD GitLab
+
+O arquivo `.gitlab-ci.yml` é neutro quanto à organização: ele testa, gera a imagem com Kaniko,
+publica no Registry do próprio projeto e implanta os templates. Configure as seguintes variáveis
+protegidas no projeto GitLab (ou no grupo), sem incluí-las no repositório:
+
+O destino definido para este projeto é **`ipearev/streamlit`**. Portanto, envie o
+repositório com esse caminho no GitLab antes de ativar o pipeline.
+
+| Variável | Valor definido pelo seu ambiente |
+|---|---|
+| `KUBE_CONTEXT` | Contexto autorizado para o agente Kubernetes do seu grupo |
+| `K8S_NAMESPACE` | Namespace exclusivo do IPEAREV |
+| `K8S_INGRESS_HOST` | Host HTTPS público ou interno da aplicação |
+| `K8S_TLS_SECRET` | Secret TLS existente nesse namespace |
+| `K8S_IMAGE_PULL_SECRET` | Secret com acesso ao Container Registry do seu GitLab |
+
+Além dessas variáveis, o namespace deve conter o Secret `ipearev-runtime`, com a configuração
+do provedor LLM. A autorização do agente Kubernetes é mantida no projeto separado
+`ipearev/k8s-agents` e deve incluir:
+
+```yaml
+ci_access:
+  projects:
+    - id: ipearev/streamlit
+    - id: ipearev/cicd
+```
+
+O valor de `KUBE_CONTEXT` será o contexto exposto pelo agente Kubernetes configurado no projeto
+`ipearev/k8s-agents`.
+
 ### Requisitos
 
 - Python 3.10+

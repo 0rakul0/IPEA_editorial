@@ -1,0 +1,23 @@
+services:
+  ipearev:
+    build:
+      context: .
+    image: ipearev:local
+    ports:
+      - "8501:8501"
+    environment:
+      LLM_PRIMARY_PROVIDER: ${LLM_PRIMARY_PROVIDER:-openai}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
+      OPENALEX_EMAIL: ${OPENALEX_EMAIL:-}
+      IPEAREV_ALLOW_CONFIG_PERSISTENCE: "false"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

@@ -213,7 +213,7 @@ Consulte também a [documentação de endpoints do IpeaIA](https://intranet.ipea
         st.selectbox("Modelo alternativo", options=[_MODEL_PLACEHOLDER], disabled=True)
 
 
-def render_configuracao_usuario_section(*, env_path: Path) -> None:
+def render_configuracao_usuario_section(*, env_path: Path, allow_persistence: bool = True) -> None:
     """Renderiza as opções de OpenAI, IpeaGPT e Ollama."""
     _ensure_user_settings_state()
 
@@ -254,8 +254,10 @@ def render_configuracao_usuario_section(*, env_path: Path) -> None:
             st.success("Configuração aplicada nesta sessão.")
             st.rerun()
     with action_b:
-        if st.button("Salvar", use_container_width=True):
+        if st.button("Salvar", use_container_width=True, disabled=not allow_persistence):
             _save_user_settings(env_path)
             _apply_user_settings_to_env()
             st.success("Configuração salva.")
             st.rerun()
+    if not allow_persistence:
+        st.caption("No ambiente implantado, as credenciais ficam somente na sessão.")
