@@ -19,6 +19,7 @@ def _clear_llm_env(monkeypatch):
         "LLM_MODEL",
         "LLM_BASE_URL",
         "LLM_API_KEY",
+        "IPEAGPT_API_KEY",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "OPENAI_BASE_URL",
@@ -89,6 +90,18 @@ def test_get_llm_config_uses_openai_compatible_settings(monkeypatch):
     assert config["api_key"] == ""
 
 
+def test_openai_compatible_does_not_reuse_openai_api_key(monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_BASE_URL", "http://interna/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    config = get_llm_config()
+
+    assert config["provider"] == "openai_compatible"
+    assert config["api_key"] == ""
+
+
 def test_get_llm_candidate_configs_prefers_explicit_provider_before_openai(monkeypatch):
     _clear_llm_env(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -115,7 +128,7 @@ def test_get_llm_candidate_configs_uses_fallback_when_openai_is_unavailable(monk
     assert configs[0]["provider"] == "openai_compatible"
 
 
-def test_get_llm_config_prefers_generic_model_over_provider_specific_alias(monkeypatch):
+def test_get_llm_config_keeps_openai_model_separate_from_compatible_model(monkeypatch):
     _clear_llm_env(monkeypatch)
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
     monkeypatch.setenv("LLM_MODEL", "gpt-4.1-mini")
@@ -124,7 +137,7 @@ def test_get_llm_config_prefers_generic_model_over_provider_specific_alias(monke
     config = get_llm_config()
 
     assert config["provider"] == "openai"
-    assert config["model"] == "gpt-4.1-mini"
+    assert config["model"] == "gpt-5.2"
 
 
 def test_get_llm_config_prefers_generic_ollama_settings_over_legacy_aliases(monkeypatch):

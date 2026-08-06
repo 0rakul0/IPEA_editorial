@@ -67,10 +67,12 @@ def _build_candidate_provider_order() -> list[str]:
 
     if primary_provider:
         ordered.append(primary_provider)
+    elif explicit_provider:
+        ordered.append(explicit_provider)
     elif _has_env("OPENAI_API_KEY"):
         ordered.append("openai")
 
-    if explicit_provider:
+    if explicit_provider and explicit_provider not in ordered:
         ordered.append(explicit_provider)
     else:
         inferred_provider = _infer_provider()
@@ -110,7 +112,7 @@ def _build_provider_config(provider: str) -> dict[str, str]:
             "provider": "openai_compatible",
             "model": _read_env("LLM_MODEL", "OPENAI_MODEL", default=DEFAULT_OPENAI_MODEL),
             "base_url": _read_env("LLM_BASE_URL", "OPENAI_BASE_URL"),
-            "api_key": _read_env("LLM_API_KEY", "OPENAI_API_KEY"),
+            "api_key": _read_env("IPEAGPT_API_KEY", "LLM_API_KEY"),
         }
 
     return {

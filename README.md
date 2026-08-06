@@ -457,7 +457,7 @@ Para verificar os modelos disponiveis no provider configurado:
 uv run python scripts/editorial_lab.py preflight
 ```
 
-Na interface Streamlit, a sidebar da LLM agora tambem tem o botao `Listar modelos disponiveis`.
+Na interface Streamlit, é possível escolher OpenAI, IpeaGPT ou Ollama local. No IpeaGPT, o usuário informa somente o Token Bearer e seleciona um modelo disponibilizado pelo serviço; o endpoint é definido pela configuração técnica do projeto.
 
 ## Calibragem da skill e melhoria dos prompts
 
