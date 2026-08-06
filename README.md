@@ -289,6 +289,38 @@ O app:
 - mostra progresso geral e progresso por agente durante a execucao;
 - entrega DOCX e relatorios como downloads, sem gravar artefatos no projeto.
 
+#### Interface do app
+
+**Visao geral**
+
+Tela inicial da aplicacao. Ela concentra o upload do documento principal, o resumo estrutural do arquivo carregado e as abas de navegacao entre diagnostico, erros encontrados e grounding externo.
+
+![Visao geral do app Streamlit](docs/imagens/streamlit/visao-geral.png)
+
+**Configuracao do usuario**
+
+Painel lateral para definir o provider principal da sessao, o modelo em uso e a forma de persistencia da configuracao. A interface permite aplicar a mudanca apenas na sessao atual, salvar no `.env` e listar os modelos disponiveis no provider selecionado.
+
+![Painel de configuracao do usuario com OpenAI](docs/imagens/streamlit/configuracao-usuario-openai.png)
+
+**Execucao dos agentes**
+
+Bloco de controle da revisao. Ele permite rodar todos os agentes em sequencia coordenada ou acionar individualmente cada especialidade editorial, como sinopse, gramatica, tabelas, estrutura, referencias e tipografia.
+
+![Painel de execucao dos agentes](docs/imagens/streamlit/execucao-agentes.png)
+
+**Grounding externo**
+
+Secao opcional para busca de literatura recente e comparacao do manuscrito com trabalhos relacionados. Os controles ajustam a janela temporal e a quantidade de resultados finais antes de iniciar a busca.
+
+![Painel de grounding externo](docs/imagens/streamlit/grounding-externo.png)
+
+**Preset IpeaGPT / OpenAI-compatible**
+
+Configuracao detalhada para ambientes compativeis com a API da OpenAI, incluindo o preset do IpeaGPT, os endpoints de `models` e `chat/completions`, um modelo alternativo e o token bearer enviado no cabecalho `Authorization`.
+
+![Painel de configuracao do IpeaGPT](docs/imagens/streamlit/configuracao-ipeagpt.png)
+
 ### CLI
 
 ```bash
