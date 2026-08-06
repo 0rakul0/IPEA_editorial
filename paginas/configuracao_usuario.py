@@ -231,20 +231,21 @@ def render_configuracao_usuario_section(*, env_path: Path) -> None:
         help="Define qual opção será usada primeiro na revisão.",
     )
 
-    with st.expander("OpenAI", expanded=selected_provider == "openai"):
-        _render_openai_options()
-
-    with st.expander("IpeaGPT", expanded=selected_provider == "openai_compatible"):
-        _render_ipeagpt_options()
-
-    with st.expander("Ollama (local)", expanded=selected_provider == "ollama"):
-        st.text_input("Modelo local", key="user_ollama_model", placeholder="llama3.1:8b")
-        st.text_input("Chave de API (opcional)", key="user_ollama_api_key", type="password")
-        st.text_input(
-            "Base URL local",
-            key="user_ollama_base_url",
-            placeholder="http://localhost:11434/v1",
-        )
+    if selected_provider == "openai":
+        with st.expander("OpenAI", expanded=True):
+            _render_openai_options()
+    elif selected_provider == "openai_compatible":
+        with st.expander("IpeaGPT", expanded=True):
+            _render_ipeagpt_options()
+    else:
+        with st.expander("Ollama (local)", expanded=True):
+            st.text_input("Modelo local", key="user_ollama_model", placeholder="llama3.1:8b")
+            st.text_input("Chave de API (opcional)", key="user_ollama_api_key", type="password")
+            st.text_input(
+                "Base URL local",
+                key="user_ollama_base_url",
+                placeholder="http://localhost:11434/v1",
+            )
 
     action_a, action_b = st.columns(2)
     with action_a:

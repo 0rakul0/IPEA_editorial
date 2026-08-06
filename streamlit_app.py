@@ -30,8 +30,7 @@ from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtim
 from src.editorial_docx.models import AgentComment, ExecutionTrace, VerificationSummary, agent_short_label
 from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
 
-st.set_page_config(page_title="Editorial TD - Agentes", layout="wide")
-st.title("Revisão Editorial TD com Agentes")
+st.set_page_config(page_title="IPEAREV | Revisão editorial", page_icon="✦", layout="wide")
 
 AGENT_LABELS = {
     "metadados": "Metadados",
@@ -48,6 +47,15 @@ project_root = Path(__file__).resolve().parent
 env_path = project_root / ".env"
 
 with st.sidebar:
+    st.markdown(
+        """
+        <div class="sidebar-brand">
+          <div class="sidebar-brand-mark">REV</div>
+          <div><strong>IPEAREV</strong><span>revisão editorial</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     llm_config = get_llm_config()
     llm_model_tag = get_llm_model_tag(llm_config)
     render_configuracao_usuario_section(env_path=env_path)
@@ -101,6 +109,116 @@ CHAT_HEIGHT_VH = 72
 st.markdown(
     f"""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap');
+
+:root {{
+  --ipearev-navy: #0d2944;
+  --ipearev-blue: #176b87;
+  --ipearev-teal: #159a93;
+  --ipearev-cream: #f7f5f0;
+  --ipearev-ink: #132235;
+  --ipearev-muted: #637083;
+}}
+.stApp {{
+  background: var(--ipearev-cream);
+  color: var(--ipearev-ink);
+  font-family: "Manrope", sans-serif;
+}}
+[data-testid="stHeader"] {{ background: rgba(247, 245, 240, 0.88); }}
+[data-testid="stSidebar"] {{ background: var(--ipearev-navy); }}
+[data-testid="stSidebar"] .stMarkdown,
+[data-testid="stSidebar"] .stMarkdown *,
+[data-testid="stSidebar"] .stWidgetLabel,
+[data-testid="stSidebar"] .stWidgetLabel p,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+[data-testid="stSidebar"] .stTextInput label,
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] h4 {{ color: #eef5f7 !important; }}
+[data-testid="stSidebar"] .stCaption {{ color: #b9cbd5 !important; }}
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] textarea {{
+  background: #fff !important;
+  color: var(--ipearev-ink) !important;
+}}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-baseweb="select"] span,
+[data-testid="stSidebar"] [data-baseweb="select"] input {{
+  background: #fff !important;
+  color: var(--ipearev-ink) !important;
+}}
+[data-testid="stSidebar"] [data-baseweb="select"] svg {{ fill: var(--ipearev-blue); }}
+[data-testid="stSidebar"] [data-testid="stExpander"] {{
+  border: 1px solid rgba(213, 239, 238, 0.16);
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.04);
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {{
+  background: transparent !important;
+  color: #eef5f7 !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary * {{ color: #eef5f7 !important; }}
+[data-testid="stSidebar"] [data-testid="stAlert"],
+[data-testid="stSidebar"] [data-testid="stAlert"] *,
+[data-testid="stSidebar"] [data-testid="stAlert"] p {{
+  color: #ffffff !important;
+}}
+[data-testid="stSidebar"] [data-testid="stAlert"] svg,
+[data-testid="stSidebar"] [data-testid="stAlert"] svg * {{
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
+}}
+[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg,
+[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg *,
+[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg,
+[data-testid="stSidebar"] [data-testid="stTooltipIcon"] svg * {{
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
+}}
+[data-testid="stSidebar"] .stButton > button {{
+  border-color: rgba(213, 239, 238, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+}}
+[data-testid="stSidebar"] .stButton > button:hover {{
+  background: rgba(21, 154, 147, 0.42);
+  border-color: #65d2cb;
+}}
+.sidebar-brand {{ display: flex; align-items: center; gap: 0.75rem; margin: 0.1rem 0 1.6rem; }}
+.sidebar-brand-mark {{
+  display: grid; place-items: center; width: 2.4rem; height: 2.4rem; border-radius: 0.65rem;
+  color: var(--ipearev-navy) !important; background: #71d6cd; font-family: "DM Mono", monospace;
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em;
+}}
+.sidebar-brand strong {{ display: block; color: #fff !important; font-size: 1.02rem; letter-spacing: 0.08em; }}
+.sidebar-brand span {{ display: block; color: #b9cbd5 !important; font-size: 0.72rem; margin-top: 0.05rem; }}
+.ipearev-hero {{
+  display: flex; align-items: end; justify-content: space-between; gap: 1.5rem; padding: 1.6rem 1.8rem;
+  margin: 0.25rem 0 1.25rem; border-radius: 1rem;
+  background: linear-gradient(115deg, #0d2944, #134968 62%, #176b87);
+  box-shadow: 0 14px 32px rgba(13, 41, 68, 0.18);
+}}
+.ipearev-kicker {{ color: #8de0d9; font-family: "DM Mono", monospace; font-size: 0.72rem; letter-spacing: 0.11em; text-transform: uppercase; }}
+.ipearev-hero h1 {{
+  margin: 0.3rem 0 0; color: #fff; font-family: "Manrope", sans-serif;
+  font-size: clamp(2rem, 4vw, 3.1rem); font-weight: 800; letter-spacing: 0.03em; line-height: 1;
+}}
+.ipearev-hero p {{ margin: 0.55rem 0 0; max-width: 43rem; color: #d6e5e8; font-size: 0.95rem; }}
+.ipearev-badge {{
+  flex: 0 0 auto; padding: 0.42rem 0.65rem; border: 1px solid rgba(141, 224, 217, 0.45); border-radius: 999px;
+  color: #dffcf8; font-family: "DM Mono", monospace; font-size: 0.7rem; white-space: nowrap;
+}}
+.stTabs [data-baseweb="tab-list"] {{ gap: 0.4rem; border-bottom: 1px solid #d9ddd8; }}
+.stTabs [data-baseweb="tab"] {{ height: 2.55rem; padding: 0 0.9rem; color: var(--ipearev-muted); font-weight: 700; }}
+.stTabs [aria-selected="true"] {{ color: var(--ipearev-navy) !important; }}
+.stTabs [data-baseweb="tab-highlight"] {{ background-color: var(--ipearev-teal); }}
+.stButton > button {{ border: 1px solid var(--ipearev-blue); border-radius: 0.55rem; background: var(--ipearev-blue); color: #fff; font-weight: 700; }}
+.stButton > button:hover {{ border-color: var(--ipearev-navy); background: var(--ipearev-navy); color: #fff; }}
 .st-key-chat_history_box {{
   height: {CHAT_HEIGHT_VH}vh;
   overflow-y: auto;
@@ -110,35 +228,55 @@ st.markdown(
   line-height: 1.2;
 }}
 div[data-testid="stFileUploaderDropzone"] {{
-  padding: 0.85rem 0.9rem;
+  padding: 1rem;
   min-height: 5.25rem;
+  border: 1.5px dashed #7ca9ad;
+  border-radius: 0.7rem;
+  background: #f3f8f7;
 }}
 .top-grid-card {{
-  border: 1px solid rgba(49, 51, 63, 0.15);
-  border-radius: 0.9rem;
-  padding: 0.85rem 0.95rem 0.75rem;
-  background: rgba(248, 249, 252, 0.95);
+  border: 1px solid #d8e1df;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: #fff;
   height: 100%;
+  box-shadow: 0 3px 10px rgba(13, 41, 68, 0.04);
 }}
 .top-grid-label {{
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #4b5563;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ipearev-muted);
   margin-bottom: 0.45rem;
 }}
 .top-grid-value {{
   font-size: 0.98rem;
-  font-weight: 700;
-  color: #111827;
+  font-weight: 800;
+  color: var(--ipearev-navy);
   line-height: 1.25;
 }}
 .top-grid-muted {{
   font-size: 0.84rem;
-  color: #6b7280;
+  color: var(--ipearev-muted);
   line-height: 1.3;
 }}
 </style>
 """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <section class="ipearev-hero">
+      <div>
+        <div class="ipearev-kicker">Ipea · revisão assistida</div>
+        <h1>IPEAREV</h1>
+        <p>Uma bancada editorial para analisar, qualificar e preparar documentos com apoio de agentes especializados.</p>
+      </div>
+      <div class="ipearev-badge">BETA · IA EDITORIAL</div>
+    </section>
+    """,
     unsafe_allow_html=True,
 )
 
