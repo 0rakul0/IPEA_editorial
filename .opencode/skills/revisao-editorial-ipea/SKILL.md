@@ -48,6 +48,8 @@ Fontes de verdade:
 
 `estrutura` (`est`) disponível mas fora da execução padrão.
 
+`coerencia_logica` (`log`) é experimental e opt-in, até ser calibrado com uma base de comentários adjudicados.
+
 ## Saída esperada (contrato)
 
 ```json

@@ -169,6 +169,7 @@ A ordem padrão atual é:
 AGENT_ORDER = [
     "sinopse_abstract",
     "gramatica_ortografia",
+    "coerencia_logica",
     "tabelas_figuras",
     "referencias",
     "tipografia",
@@ -184,6 +185,7 @@ Mapeamento atual:
 - `sinopse_abstract` -> `sin`
 - `estrutura` -> `est`
 - `gramatica_ortografia` -> `gram`
+- `coerencia_logica` -> `log`
 - `tabelas_figuras` -> `tab`
 - `referencias` -> `ref`
 - `tipografia` -> `tip`
