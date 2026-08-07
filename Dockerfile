@@ -2,7 +2,11 @@
 
 # Imagem de execução da interface IPEAREV. As dependências são resolvidas pelo
 # lockfile, para que builds locais e de CI usem o mesmo conjunto de pacotes.
-FROM ghcr.io/astral-sh/uv:0.10.0-python3.12-bookworm-slim AS builder
+FROM python:3.12-slim-bookworm AS builder
+
+# A imagem distroless do uv fornece somente os binários e evita depender de
+# tags derivadas de distribuição, que podem ser descontinuadas pelo registry.
+COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
 
 WORKDIR /app
 
