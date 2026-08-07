@@ -205,6 +205,15 @@ st.markdown(
 [data-testid="stSidebar"] .stButton > button {{
   border-color: rgba(213, 239, 238, 0.28);
   background: rgba(255, 255, 255, 0.08);
+  color: #ffffff !important;
+  opacity: 1;
+}}
+[data-testid="stSidebar"] .stButton > button:disabled,
+[data-testid="stSidebar"] .stButton > button[disabled] {{
+  color: #ffffff !important;
+  opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+  border-color: rgba(213, 239, 238, 0.42) !important;
 }}
 [data-testid="stSidebar"] .stButton > button:hover {{
   background: rgba(21, 154, 147, 0.42);
