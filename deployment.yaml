@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: #CI_PROJECT_NAME#
-  namespace: #CI_PROJECT_ROOT_NAMESPACE#-#CI_PROJECT_NAME#
+  name: streamlit
+  namespace: ipearev-streamlit
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: #CI_PROJECT_NAME#
+      app: streamlit
   template:
     metadata:
       labels:
-        app: #CI_PROJECT_NAME#
+        app: streamlit
     spec:
       containers:
-      - name: #CI_PROJECT_NAME#
-        image: #CI_REGISTRY_IMAGE#:#CI_COMMIT_SHA#
+      - name: streamlit
+        image: __IMAGE__
         ports:
         - containerPort: 8501
       imagePullSecrets:

@@ -27,29 +27,21 @@ deploy:
     entrypoint: ['']
   environment:
     name: dev
-    url: https://$CI_PROJECT_ROOT_NAMESPACE-$CI_PROJECT_NAME-dev.ipea.gov.br
+    url: https://ipearev-streamlit-dev.ipea.gov.br
     kubernetes:
-      namespace: ipearev
+      namespace: ipearev-streamlit
     on_stop: stop_app
   script:
     - kubectl config get-contexts
     - kubectl config use-context ipearev/k8s-agents:ipearev
-    - echo "Transforming yaml files..."
-    - sed -i -e 's|#CI_PROJECT_ROOT_NAMESPACE#|'$CI_PROJECT_ROOT_NAMESPACE'|g' deployment.yaml
-    - sed -i -e 's|#CI_PROJECT_NAME#|'$CI_PROJECT_NAME'|g' deployment.yaml
-    - sed -i -e 's|#CI_REGISTRY_IMAGE#|'$CI_REGISTRY_IMAGE'|g' deployment.yaml
-    - sed -i -e 's|#CI_COMMIT_SHA#|'$CI_COMMIT_SHA'|g' deployment.yaml
-    - sed -i -e 's|#CI_PROJECT_ROOT_NAMESPACE#|'$CI_PROJECT_ROOT_NAMESPACE'|g' service.yaml
-    - sed -i -e 's|#CI_PROJECT_NAME#|'$CI_PROJECT_NAME'|g' service.yaml
-    - sed -i -e 's|#CI_PROJECT_ROOT_NAMESPACE#|'$CI_PROJECT_ROOT_NAMESPACE'|g' ingress.yaml
-    - sed -i -e 's|#CI_PROJECT_NAME#|'$CI_PROJECT_NAME'|g' ingress.yaml
     - echo "Deployment of image=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-    - echo "in namespace=$CI_PROJECT_ROOT_NAMESPACE-$CI_PROJECT_NAME deployment=$CI_PROJECT_NAME ..."
-    - kubectl apply -f deployment.yaml
-    - kubectl rollout status deployment/$CI_PROJECT_NAME --namespace=$CI_PROJECT_ROOT_NAMESPACE-$CI_PROJECT_NAME --timeout=5m
-    - echo "Creating service $CI_PROJECT_NAME"
+    - echo "in namespace=ipearev-streamlit deployment=streamlit ..."
+    - sed "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deployment.yaml > /tmp/deployment.yaml
+    - kubectl apply -f /tmp/deployment.yaml
+    - kubectl rollout status deployment/streamlit --namespace=ipearev-streamlit --timeout=5m
+    - echo "Creating service streamlit"
     - kubectl apply -f service.yaml
-    - echo "Creating ingress $CI_PROJECT_NAME for app=$CI_PROJECT_NAME"
+    - echo "Creating ingress streamlit for app=streamlit"
     - kubectl apply -f ingress.yaml
 stop_app:
   stage: stop
@@ -63,12 +55,13 @@ stop_app:
   script:
     - kubectl config get-contexts
     - kubectl config use-context ipearev/k8s-agents:ipearev
-    - kubectl delete ingress -n ipearev-"$CI_PROJECT_NAME" $(echo "$CI_PROJECT_NAME")
-    - kubectl delete service -n ipearev-"$CI_PROJECT_NAME" $(echo "$CI_PROJECT_NAME")
-    - kubectl delete deployment -n ipearev-"$CI_PROJECT_NAME" $(echo "$CI_PROJECT_NAME")
+    - sed "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deployment.yaml > /tmp/deployment.yaml
+    - kubectl delete ingress -n ipearev-streamlit streamlit
+    - kubectl delete service -n ipearev-streamlit streamlit
+    - kubectl delete -f /tmp/deployment.yaml
   when: manual
   environment:
     name: dev
     kubernetes:
-      namespace: ipearev-"$CI_PROJECT_NAME"
+      namespace: ipearev-streamlit
     action: stop

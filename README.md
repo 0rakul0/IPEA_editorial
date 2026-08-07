@@ -232,18 +232,16 @@ arquivos somente leitura; documentos carregados e saídas da interface permanece
 Por isso, em contêiner, a opção **Salvar** credenciais fica desativada; use variáveis de
 ambiente/Secrets do ambiente ou a opção **Usar nesta sessão**.
 
-Para Kubernetes, os manifestos são templates no mesmo formato do projeto RAG. A pipeline
-substitui os marcadores `#CI_PROJECT_ROOT_NAMESPACE#`, `#CI_PROJECT_NAME#`,
-`#CI_REGISTRY_IMAGE#` e `#CI_COMMIT_SHA#` antes de aplicá-los. Para este projeto, o destino é
-o namespace `ipearev-streamlit`, a imagem usa o secret `registry-gitlab-ipearev` e o Ingress
+Para Kubernetes, os nomes dos recursos, namespace e host já estão definidos para este projeto.
+A pipeline substitui somente `__IMAGE__` pela imagem da revisão publicada. O destino é o
+namespace `ipearev-streamlit`, a imagem usa o secret `registry-gitlab-ipearev` e o Ingress
 recebe o endereço `https://ipearev-streamlit-dev.ipea.gov.br`.
 
 ### CI/CD GitLab
 
 > **Configuração própria do IPEAREV.** Para o projeto `ipearev/streamlit`, o agente é
-> `ipearev/k8s-agents` e o contexto é `ipearev/k8s-agents:ipearev`. A pipeline deriva o
-> namespace `ipearev-streamlit` e o endereço `https://ipearev-streamlit-dev.ipea.gov.br`
-> a partir de `CI_PROJECT_ROOT_NAMESPACE` e `CI_PROJECT_NAME`.
+> `ipearev/k8s-agents` e o contexto é `ipearev/k8s-agents:ipearev`. O namespace é
+> `ipearev-streamlit` e o endereço é `https://ipearev-streamlit-dev.ipea.gov.br`.
 >
 > O namespace precisa conter os secrets `registry-gitlab-ipearev` e
 > `ipea-star-certificate`.

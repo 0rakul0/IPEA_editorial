@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: #CI_PROJECT_NAME#
-  namespace: #CI_PROJECT_ROOT_NAMESPACE#-#CI_PROJECT_NAME#
+  name: streamlit
+  namespace: ipearev-streamlit
 spec:
   ports:
     - name: http
@@ -10,5 +10,5 @@ spec:
       protocol: TCP
       targetPort: 8501
   selector:
-    app: #CI_PROJECT_NAME#
+    app: streamlit
   type: ClusterIP
