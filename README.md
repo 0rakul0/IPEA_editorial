@@ -252,34 +252,36 @@ de acordo com o tamanho esperado dos documentos e a concorrência do provedor LL
 
 ### CI/CD GitLab
 
-O arquivo `.gitlab-ci.yml` é neutro quanto à organização: ele testa, gera a imagem com Kaniko,
-publica no Registry do próprio projeto e implanta os templates. Configure as seguintes variáveis
-protegidas no projeto GitLab (ou no grupo), sem incluí-las no repositório:
+> **Configuração IpeaLegs (desenvolvimento).** Para o projeto `ipearev/streamlit`, a
+> referência operacional é o agente `ipealegis/k8s-agents`, contexto
+> `ipealegis/k8s-agents:ipealegis`, namespace `ipearev-streamlit` e endereço
+> `https://ipearev.ipea.gov.br`. Os secrets esperados no namespace são
+> `ipearev-runtime`, `registry-gitlab-ipealegis` e `ipea-star-certificate`.
+>
+> Não crie `KUBE_CONTEXT`, `K8S_NAMESPACE`, `K8S_INGRESS_HOST`, `K8S_TLS_SECRET` ou
+> `K8S_IMAGE_PULL_SECRET` no projeto. A pipeline usa os valores acima diretamente.
+> É obrigatório adicionar `- id: ipearev/streamlit` ao `ci_access.projects` do agente
+> no repositório `ipealegis/k8s-agents`.
+
+O arquivo `.gitlab-ci.yml` testa, gera a imagem com Kaniko, publica no Registry do próprio
+projeto e implanta os templates pelo agente Kubernetes configurado acima.
 
 O destino definido para este projeto é **`ipearev/streamlit`**. Portanto, envie o
 repositório com esse caminho no GitLab antes de ativar o pipeline.
 
-| Variável | Valor definido pelo seu ambiente |
-|---|---|
-| `KUBE_CONTEXT` | Contexto autorizado para o agente Kubernetes do seu grupo |
-| `K8S_NAMESPACE` | Namespace exclusivo do IPEAREV |
-| `K8S_INGRESS_HOST` | Host HTTPS público ou interno da aplicação |
-| `K8S_TLS_SECRET` | Secret TLS existente nesse namespace |
-| `K8S_IMAGE_PULL_SECRET` | Secret com acesso ao Container Registry do seu GitLab |
-
-Além dessas variáveis, o namespace deve conter o Secret `ipearev-runtime`, com a configuração
-do provedor LLM. A autorização do agente Kubernetes é mantida no projeto separado
-`ipearev/k8s-agents` e deve incluir:
+O namespace deve conter o Secret `ipearev-runtime`, com a configuração do provedor LLM. A
+autorização do agente Kubernetes é mantida no projeto separado `ipealegis/k8s-agents` e deve
+incluir:
 
 ```yaml
 ci_access:
   projects:
+    - id: ipealegis/rag
+    - id: ipealegis/test-cicd
     - id: ipearev/streamlit
-    - id: ipearev/cicd
 ```
 
-O valor de `KUBE_CONTEXT` será o contexto exposto pelo agente Kubernetes configurado no projeto
-`ipearev/k8s-agents`.
+Não são necessárias variáveis de infraestrutura no projeto GitLab.
 
 ### Roteiro completo de publicação e subida
 
@@ -312,15 +314,14 @@ O valor de `KUBE_CONTEXT` será o contexto exposto pelo agente Kubernetes config
      --from-env-file=.env.docker
    ```
 
-   Crie também o secret de pull do Registry, o certificado TLS indicado por `K8S_TLS_SECRET` e
-   autorize o projeto `ipearev/streamlit` no agente do repositório `ipearev/k8s-agents`.
+   No namespace `ipearev-streamlit`, crie ou clone os secrets `registry-gitlab-ipealegis` e
+   `ipea-star-certificate`; autorize também o projeto `ipearev/streamlit` no agente do
+   repositório `ipealegis/k8s-agents`.
 
 4. **Configurar CI/CD no GitLab**
 
-   No projeto `ipearev/streamlit`, defina as variáveis protegidas `KUBE_CONTEXT`,
-   `K8S_NAMESPACE`, `K8S_INGRESS_HOST`, `K8S_TLS_SECRET` e
-   `K8S_IMAGE_PULL_SECRET`. A pipeline executa testes, cria a imagem no Container Registry e
-   substitui os marcadores dos manifestos antes de aplicar o deploy.
+   Não cadastre variáveis de infraestrutura no projeto. A pipeline usa o contexto, namespace,
+   host e secrets definidos acima; ela valida a presença dos secrets antes de aplicar o deploy.
 
 5. **Publicar**
 
