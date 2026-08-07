@@ -60,7 +60,7 @@ spec:
             - name: tmp
               mountPath: /tmp
       imagePullSecrets:
-        - name: registry-gitlab-ipealegis
+        - name: registry-gitlab-ipearev
       volumes:
         - name: tmp
           emptyDir: {}

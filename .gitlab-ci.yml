@@ -39,11 +39,11 @@ deploy:
     url: https://ipearev.ipea.gov.br
     on_stop: stop_app
   script:
-    - export K8S_NAMESPACE="${CI_PROJECT_ROOT_NAMESPACE}-${CI_PROJECT_NAME}"
-    - kubectl config use-context "ipealegis/k8s-agents:ipealegis"
+    - export K8S_NAMESPACE="ipearev"
+    - kubectl config use-context "ipearev/k8s-agents:ipearev"
     - kubectl get namespace "${K8S_NAMESPACE}"
     - kubectl get secret --namespace "${K8S_NAMESPACE}" ipearev-runtime
-    - kubectl get secret --namespace "${K8S_NAMESPACE}" registry-gitlab-ipealegis
+    - kubectl get secret --namespace "${K8S_NAMESPACE}" registry-gitlab-ipearev
     - kubectl get secret --namespace "${K8S_NAMESPACE}" ipea-star-certificate
     - sed "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deployment.yaml > /tmp/deployment.yaml
     - sed "s|__INGRESS_HOST__|ipearev.ipea.gov.br|g" ingress.yaml > /tmp/ingress.yaml
@@ -62,8 +62,8 @@ stop_app:
     name: development
     action: stop
   script:
-    - export K8S_NAMESPACE="${CI_PROJECT_ROOT_NAMESPACE}-${CI_PROJECT_NAME}"
-    - kubectl config use-context "ipealegis/k8s-agents:ipealegis"
+    - export K8S_NAMESPACE="ipearev"
+    - kubectl config use-context "ipearev/k8s-agents:ipearev"
     - sed "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deployment.yaml > /tmp/deployment.yaml
     - sed "s|__INGRESS_HOST__|ipearev.ipea.gov.br|g" ingress.yaml > /tmp/ingress.yaml
     - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f /tmp/ingress.yaml

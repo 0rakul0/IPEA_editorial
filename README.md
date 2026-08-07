@@ -252,16 +252,15 @@ de acordo com o tamanho esperado dos documentos e a concorrência do provedor LL
 
 ### CI/CD GitLab
 
-> **Configuração IpeaLegs (desenvolvimento).** Para o projeto `ipearev/streamlit`, a
-> referência operacional é o agente `ipealegis/k8s-agents`, contexto
-> `ipealegis/k8s-agents:ipealegis`, namespace `ipearev-streamlit` e endereço
-> `https://ipearev.ipea.gov.br`. Os secrets esperados no namespace são
-> `ipearev-runtime`, `registry-gitlab-ipealegis` e `ipea-star-certificate`.
+> **Configuração própria do IPEAREV.** Para o projeto `ipearev/streamlit`, o agente é
+> `ipearev/k8s-agents`, o contexto é `ipearev/k8s-agents:ipearev`, o namespace é
+> `ipearev` e o endereço é `https://ipearev.ipea.gov.br`. Os secrets esperados no
+> namespace são `ipearev-runtime`, `registry-gitlab-ipearev` e `ipea-star-certificate`.
 >
 > Não crie `KUBE_CONTEXT`, `K8S_NAMESPACE`, `K8S_INGRESS_HOST`, `K8S_TLS_SECRET` ou
 > `K8S_IMAGE_PULL_SECRET` no projeto. A pipeline usa os valores acima diretamente.
 > É obrigatório adicionar `- id: ipearev/streamlit` ao `ci_access.projects` do agente
-> no repositório `ipealegis/k8s-agents`.
+> no repositório `ipearev/k8s-agents`.
 
 O arquivo `.gitlab-ci.yml` testa, gera a imagem com Kaniko, publica no Registry do próprio
 projeto e implanta os templates pelo agente Kubernetes configurado acima.
@@ -270,14 +269,12 @@ O destino definido para este projeto é **`ipearev/streamlit`**. Portanto, envie
 repositório com esse caminho no GitLab antes de ativar o pipeline.
 
 O namespace deve conter o Secret `ipearev-runtime`, com a configuração do provedor LLM. A
-autorização do agente Kubernetes é mantida no projeto separado `ipealegis/k8s-agents` e deve
+autorização do agente Kubernetes é mantida no projeto separado `ipearev/k8s-agents` e deve
 incluir:
 
 ```yaml
 ci_access:
   projects:
-    - id: ipealegis/rag
-    - id: ipealegis/test-cicd
     - id: ipearev/streamlit
 ```
 
@@ -314,9 +311,9 @@ Não são necessárias variáveis de infraestrutura no projeto GitLab.
      --from-env-file=.env.docker
    ```
 
-   No namespace `ipearev-streamlit`, crie ou clone os secrets `registry-gitlab-ipealegis` e
+   No namespace `ipearev`, crie ou clone os secrets `registry-gitlab-ipearev` e
    `ipea-star-certificate`; autorize também o projeto `ipearev/streamlit` no agente do
-   repositório `ipealegis/k8s-agents`.
+   repositório `ipearev/k8s-agents`.
 
 4. **Configurar CI/CD no GitLab**
 
