@@ -29,7 +29,7 @@ from src.editorial_docx.graph_chat import run_conversation
 from src.editorial_docx.literature_grounding import run_literature_grounding
 from src.editorial_docx.llm import get_llm_config, get_llm_model_tag, get_runtime_settings
 from src.editorial_docx.models import AgentComment, ExecutionTrace, VerificationSummary, agent_short_label
-from src.editorial_docx.prompts import AGENT_ORDER, detect_prompt_profile
+from src.editorial_docx.prompts import AGENT_ORDER, OPTIONAL_AGENT_ORDER, detect_prompt_profile
 
 st.set_page_config(page_title="IPEAREV | Revisão editorial", page_icon="✦", layout="wide")
 
@@ -41,6 +41,7 @@ AGENT_LABELS = {
     "comentarios_usuario_referencias": "Comentários do Usuário/Referências",
     "referencias": "Referências",
     "gramatica_ortografia": "Gramática/Ortografia",
+    "coerencia_logica": "Coerência lógica (experimental)",
     "tipografia": "Tipografia",
 }
 
@@ -86,6 +87,17 @@ with st.sidebar:
         if st.button(label, key=f"sidebar_run_{agent}", use_container_width=True):
             st.session_state.pending_run = {
                 "question": f"Execute revisão focada em {label} e liste problemas com trecho e sugestão de correção.",
+                "agents": [agent],
+                "source": f"agent:{agent}",
+            }
+
+    st.markdown("#### Agentes experimentais")
+    st.caption("Use somente para teste: os achados exigem confirmação editorial.")
+    for agent in OPTIONAL_AGENT_ORDER:
+        label = AGENT_LABELS.get(agent, agent)
+        if st.button(label, key=f"sidebar_run_{agent}", use_container_width=True):
+            st.session_state.pending_run = {
+                "question": f"Execute revisão focada em {label}; reporte somente problemas verificáveis no próprio texto.",
                 "agents": [agent],
                 "source": f"agent:{agent}",
             }

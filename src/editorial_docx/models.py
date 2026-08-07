@@ -8,6 +8,7 @@ AGENT_SHORT_LABELS = {
     "sinopse_abstract": "sin",
     "estrutura": "est",
     "gramatica_ortografia": "gram",
+    "coerencia_logica": "log",
     "tabelas_figuras": "tab",
     "comentarios_usuario_referencias": "usrref",
     "referencias": "ref",

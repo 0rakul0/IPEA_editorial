@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from . import default, grammar, metadata, references, structure, synopsis, tables_figures, typography
+from . import coherence, default, grammar, metadata, references, structure, synopsis, tables_figures, typography
 
 
 def scope_indexes_for_agent(agent: str, chunks: list[str], refs: list[str], sections, total: int) -> list[int]:
@@ -19,4 +19,6 @@ def scope_indexes_for_agent(agent: str, chunks: list[str], refs: list[str], sect
         return typography.build_scope(chunks, refs, sections, total)
     if agent == "gramatica_ortografia":
         return grammar.build_scope(chunks, refs, sections, total)
+    if agent == "coerencia_logica":
+        return coherence.build_scope(chunks, refs, sections, total)
     return default.build_scope(chunks, refs, sections, total)

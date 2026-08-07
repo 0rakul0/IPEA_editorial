@@ -21,6 +21,7 @@ PROMPT_FILES = {
     "metadados": PROMPTS_DIR / "metadados.md",
     "sinopse_abstract": PROMPTS_DIR / "sinopse_abstract.md",
     "gramatica_ortografia": PROMPTS_DIR / "gramatica_ortografia.md",
+    "coerencia_logica": PROMPTS_DIR / "coerencia_logica.md",
     "tipografia": PROMPTS_DIR / "tipografia.md",
     "tabelas_figuras": PROMPTS_DIR / "tabelas_figuras.md",
     "estrutura": PROMPTS_DIR / "estrutura.md",
@@ -38,6 +39,9 @@ AGENT_ORDER = [
     "referencias",
     "tipografia",
 ]
+
+# Agentes experimentais não entram na revisão padrão até passarem pelo holdout.
+OPTIONAL_AGENT_ORDER = ["coerencia_logica"]
 
 _PROFILE_BLOCK_RE = re.compile(r"(?ms)^\s*([A-Z][A-Z0-9_]*)\s*=\s*\"\"\"\s*(.*?)\s*\"\"\"")
 
@@ -125,6 +129,7 @@ def _build_tasks_context(agent_name: str) -> str:
         "estrutura": ["1.1]", "1.6]", "1.8]"],
         "sinopse_abstract": ["1.3]"],
         "gramatica_ortografia": ["1.4]", "1.5]"],
+        "coerencia_logica": [],
         "tabelas_figuras": ["1.6]"],
         "referencias": ["1.8]"],
         "tipografia": ["1.1]", "1.3]", "1.4]", "1.5]", "1.6]", "1.8]"],

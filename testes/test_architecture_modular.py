@@ -14,6 +14,10 @@ from editorial_docx.pipeline.context import prepare_review_document
 from editorial_docx.pipeline.scope import _agent_scope_indexes
 from editorial_docx.review_heuristics import _reference_entry_key
 from editorial_docx.token_utils import TokenChunkConfig, chunk_index_windows
+from editorial_docx.agents.heuristics.grammar import heuristic_grammar_comments
+from editorial_docx.agents.heuristics import url_validation
+from editorial_docx.config import get_review_batch_limits, get_review_context_token_budget
+from editorial_docx.pipeline.scope import prepare_review_batches
 
 
 def test_build_normalized_document_persists_sections_comments_and_references():
@@ -97,6 +101,106 @@ def test_agent_scope_indexes_grammar_uses_only_body_paragraphs_before_references
     indexes = _agent_scope_indexes("gramatica_ortografia", chunks, refs, sections=[])
 
     assert indexes == [1]
+
+
+def test_agent_scope_indexes_coherence_uses_analytical_body_only():
+    chunks = [
+        "Título",
+        "A taxa passou de 10% para 8% entre 2022 e 2023, mas o texto afirma que houve crescimento relevante do indicador.",
+        "Referências",
+        "SILVA, J. Título. 2020.",
+    ]
+    refs = [
+        "parágrafo 1 | tipo=heading",
+        "parágrafo 2 | tipo=paragraph",
+        "parágrafo 3 | tipo=reference_heading",
+        "parágrafo 4 | tipo=reference_entry",
+    ]
+
+    indexes = _agent_scope_indexes("coerencia_logica", chunks, refs, sections=[])
+
+    assert indexes == [1]
+
+
+def test_grammar_heuristic_does_not_duplicate_existing_article_after_todos():
+    comments = heuristic_grammar_comments(
+        batch_indexes=[0],
+        chunks=["Todos os participantes responderam ao questionário."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+    )
+
+    assert not any("todos os os" in item.suggested_fix for item in comments)
+
+
+def test_structure_scope_excludes_illustration_label_even_when_loader_marks_heading():
+    chunks = ["1 Introdução", "Texto analítico suficientemente longo para o bloco seguinte.", "FIGURA 1", "Legenda extensa da ilustração."]
+    refs = [
+        "parágrafo 1 | tipo=heading | numerado=sim",
+        "parágrafo 2 | tipo=paragraph",
+        "parágrafo 3 | tipo=heading",
+        "parágrafo 4 | tipo=caption",
+    ]
+
+    indexes = _agent_scope_indexes("estrutura", chunks, refs, sections=[])
+
+    assert 2 not in indexes
+
+
+def test_coherence_can_be_selected_explicitly_without_becoming_default():
+    prepared = prepare_review_batches(
+        paragraphs=["A taxa passou de 10% para 8%, mas o texto afirma crescimento."],
+        refs=["parágrafo 1 | tipo=paragraph"],
+        sections=[],
+        selected_agents=["coerencia_logica"],
+    )
+
+    assert list(prepared.agent_batches) == ["coerencia_logica"]
+
+
+def test_review_context_budget_is_model_aware(monkeypatch):
+    monkeypatch.delenv("REVIEW_CONTEXT_TOKEN_BUDGET", raising=False)
+
+    assert get_review_context_token_budget("gpt-4o-mini") == 88_000
+    assert get_review_context_token_budget("gpt-5.1") == 232_000
+    assert get_review_context_token_budget("glm-5.2") == 160_000
+    assert get_review_batch_limits("gpt-4o-mini") == (352_000, 10_000)
+
+
+def test_review_context_budget_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("REVIEW_CONTEXT_TOKEN_BUDGET", "64000")
+
+    assert get_review_context_token_budget("gpt-5.1") == 64_000
+
+
+def test_model_aware_batches_preserve_large_focus_excerpt(monkeypatch):
+    monkeypatch.setenv("REVIEW_CONTEXT_TOKEN_BUDGET", "64000")
+    long_chunks = ["Trecho %d. %s" % (index, "palavra " * 150) for index in range(40)]
+    refs = [f"parágrafo {index + 1} | tipo=paragraph" for index in range(len(long_chunks))]
+
+    prepared = prepare_review_batches(
+        paragraphs=long_chunks,
+        refs=refs,
+        sections=[],
+        selected_agents=["gramatica_ortografia"],
+    )
+
+    batch = prepared.agent_batches["gramatica_ortografia"][0]
+    assert "[39]" in batch.focus_excerpt
+
+
+def test_reference_url_validation_reports_only_definitive_not_found(monkeypatch):
+    monkeypatch.setenv("REFERENCE_URL_VALIDATION", "true")
+    monkeypatch.setattr(url_validation, "_url_status", lambda _url: 404)
+
+    comments = url_validation.heuristic_broken_url_comments(
+        batch_indexes=[0],
+        chunks=["SILVA, J. Texto. Disponível em: https://exemplo.invalid/item."],
+        refs=["parágrafo 1 | tipo=reference_entry"],
+    )
+
+    assert len(comments) == 1
+    assert comments[0].category == "reference_link"
+    assert comments[0].action_type == "author_confirmation"
 
 
 def test_locate_comment_in_document_matches_fuzzy_excerpt():

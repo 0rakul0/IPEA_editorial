@@ -15,6 +15,7 @@ from editorial_docx.llm import (
 
 def _clear_llm_env(monkeypatch):
     for key in (
+        "LLM_PRIMARY_PROVIDER",
         "LLM_PROVIDER",
         "LLM_MODEL",
         "LLM_BASE_URL",

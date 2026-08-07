@@ -16,6 +16,7 @@ from editorial_docx.__main__ import _serialize_verification as serialize_cli_ver
 from editorial_docx.docx_utils import _build_comment_lines_for_item, _build_review_note
 from editorial_docx.docx_utils import apply_comments_to_docx, extract_docx_user_comments, extract_paragraphs_with_metadata
 from editorial_docx.agents.validation.shared import has_resolved_text_anchor
+from editorial_docx.agents.validation.coherence import keep_rejection_reason as coherence_rejection_reason
 from editorial_docx.document_loader import Section
 from editorial_docx.graph_chat import (
     _agent_scope_indexes,
@@ -36,7 +37,7 @@ from editorial_docx.agents.heuristics.tables_figures import heuristic_table_figu
 from editorial_docx.models import AgentComment, ConversationResult, DocumentUserComment, VerificationDecision, VerificationSummary, agent_short_label
 from editorial_docx.pipeline.scope import _consolidate_final_comments
 from editorial_docx.prompts import detect_prompt_profile
-from editorial_docx.prompts.prompt import AGENT_ORDER, _build_agent_support_context, build_agent_prompt, load_agent_instruction
+from editorial_docx.prompts.prompt import AGENT_ORDER, OPTIONAL_AGENT_ORDER, _build_agent_support_context, build_agent_prompt, load_agent_instruction
 from editorial_docx.prompts.schemas import agent_output_contract_text
 from editorial_docx.pipeline.runtime import LLMConnectionFailure, build_coordinator_answer
 from editorial_docx.user_comment_refs import build_reference_search_requests
@@ -130,6 +131,11 @@ def test_parse_comments_recovers_json_with_prose_and_trailing_commas():
 
 def test_agent_order_includes_estrutura():
     assert "estrutura" in AGENT_ORDER
+
+
+def test_coherence_logic_is_experimental_until_holdout_calibration():
+    assert "coerencia_logica" not in AGENT_ORDER
+    assert "coerencia_logica" in OPTIONAL_AGENT_ORDER
 
 
 def test_parse_comments_returns_empty_list_for_empty_payload():
@@ -626,6 +632,41 @@ def test_agent_short_labels_are_compact_and_self_explanatory():
     assert agent_short_label("gramatica_ortografia") == "gram"
     assert agent_short_label("tabelas_figuras") == "tab"
     assert agent_short_label("referencias") == "ref"
+    assert agent_short_label("coerencia_logica") == "log"
+
+
+def test_coherence_validation_accepts_only_local_confirmation_request():
+    comment = AgentComment(
+        agent="coerencia_logica",
+        category="coerencia_logica",
+        message="A direção descrita conflita com os valores informados no trecho.",
+        paragraph_index=0,
+        issue_excerpt="A taxa caiu de 10% para 8%, mas o texto afirma crescimento.",
+        suggested_fix="Confirmar a direção informada e ajustar a redação se necessário.",
+        action_type="author_confirmation",
+    )
+    from editorial_docx.agents.validation.shared import build_validation_context
+
+    ctx = build_validation_context(comment, "coerencia_logica", [comment.issue_excerpt], ["parágrafo 1 | tipo=paragraph"])
+
+    assert coherence_rejection_reason(ctx) is None
+
+
+def test_coherence_validation_rejects_automatic_rewrite():
+    comment = AgentComment(
+        agent="coerencia_logica",
+        category="coerencia_logica",
+        message="A direção descrita conflita com os valores informados no trecho.",
+        paragraph_index=0,
+        issue_excerpt="A taxa caiu de 10% para 8%, mas o texto afirma crescimento.",
+        suggested_fix="Substitua crescimento por queda.",
+        action_type="author_confirmation",
+    )
+    from editorial_docx.agents.validation.shared import build_validation_context
+
+    ctx = build_validation_context(comment, "coerencia_logica", [comment.issue_excerpt], ["parágrafo 1 | tipo=paragraph"])
+
+    assert coherence_rejection_reason(ctx) == "coerência lógica não pode reescrever o argumento"
 
 
 def test_agent_scope_indexes_skips_sinopse_abstract_when_document_has_no_summary_markers():
@@ -1615,6 +1656,25 @@ def test_build_review_note_marks_typography_as_auto_applied():
     )
 
     assert _build_review_note(item) == "Ajuste tipográfico aplicado automaticamente."
+
+
+def test_typography_validation_rejects_comment_that_claims_format_is_correct():
+    from editorial_docx.agents.validation.shared import build_validation_context
+    from editorial_docx.agents.validation.typography import rejection_reason
+
+    comment = AgentComment(
+        agent="tipografia",
+        category="heading",
+        message="O título deveria estar em caixa alta e negrito, mas a formatação atual está correta.",
+        paragraph_index=0,
+        issue_excerpt="TÍTULO",
+        suggested_fix="Aplicar caixa alta e negrito.",
+        auto_apply=True,
+        format_spec="bold=true; case=upper",
+    )
+    ctx = build_validation_context(comment, "tipografia", ["TÍTULO"], ["parágrafo 1 | tipo=heading"])
+
+    assert rejection_reason(ctx) == "descartado por regra de verificação"
 
 
 def test_build_comment_lines_for_item_prioritizes_suggested_fix():

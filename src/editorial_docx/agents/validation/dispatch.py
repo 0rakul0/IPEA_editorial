@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from . import grammar, metadata, references, structure, style_conformity, synopsis, tables_figures, typography
+from . import coherence, grammar, metadata, references, structure, style_conformity, synopsis, tables_figures, typography
 from .shared import ValidationContext
 
 
@@ -22,6 +22,8 @@ def keep_rejection_reason(ctx: ValidationContext) -> str | None:
         return synopsis.keep_rejection_reason(ctx)
     if ctx.agent == "gramatica_ortografia":
         return grammar.keep_rejection_reason(ctx)
+    if ctx.agent == "coerencia_logica":
+        return coherence.keep_rejection_reason(ctx)
     return None
 
 

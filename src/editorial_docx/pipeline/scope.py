@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from ..agents.scopes import scope_indexes_for_agent
-from ..config import DEFAULT_REVIEW_MAX_BATCH_CHARS, DEFAULT_REVIEW_MAX_BATCH_CHUNKS
+from ..config import DEFAULT_REVIEW_MAX_BATCH_CHARS, DEFAULT_REVIEW_MAX_BATCH_CHUNKS, get_review_batch_limits
 from ..document_loader import Section
+from ..llm import get_llm_config
 from ..models import AgentComment, DocumentUserComment, agent_short_label
-from ..prompts import AGENT_ORDER
+from ..prompts import AGENT_ORDER, OPTIONAL_AGENT_ORDER
 from ..review_patterns import _normalized_text, _ref_block_type
 from .consolidation import consolidate_semantic_comments
 from .context import PreparedReviewDocument, prepare_review_document as _prepare_review_document
@@ -67,7 +68,10 @@ def prepare_review_batches(
     user_comments: list[DocumentUserComment] | None = None,
 ) -> PreparedReviewDocument:
     """Gera o documento preparado com os lotes que cada agente deve revisar."""
-    agent_order = [agent for agent in (selected_agents or AGENT_ORDER) if agent in AGENT_ORDER]
+    known_agents = set(AGENT_ORDER) | set(OPTIONAL_AGENT_ORDER)
+    agent_order = [agent for agent in (selected_agents or AGENT_ORDER) if agent in known_agents]
+    model_name = get_llm_config().get("model", "")
+    max_batch_chars, max_batch_chunks = get_review_batch_limits(model_name)
     return _prepare_review_document(
         chunks=paragraphs,
         refs=refs,
@@ -75,6 +79,9 @@ def prepare_review_batches(
         user_comments=user_comments or [],
         agent_order=agent_order,
         agent_scope_builder=_agent_scope_indexes,
+        max_batch_chars=max_batch_chars,
+        max_batch_chunks=max_batch_chunks,
+        focus_excerpt_max_chars=max_batch_chars,
     )
 
 

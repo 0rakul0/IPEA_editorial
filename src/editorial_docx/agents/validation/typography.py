@@ -21,6 +21,11 @@ def rejection_reason(ctx: ValidationContext) -> str | None:
     if ctx.block_type not in {"heading", "caption", "paragraph", "reference_entry"}:
         return "descartado por regra de verificação"
     fix = (comment.suggested_fix or "").casefold()
+    message = _normalized_text(comment.message)
+    if any(token in message for token in {"esta correta", "está correta", "nao requer ajuste", "não requer ajuste"}):
+        return "descartado por regra de verificação"
+    if not (comment.suggested_fix or "").strip():
+        return "descartado por regra de verificação"
     if "alterar para '" in fix or 'alterar para "' in fix:
         return "descartado por regra de verificação"
     if any(token in _normalized_text(comment.suggested_fix) for token in {"reescrever", "substituir texto", "alterar conteúdo"}):

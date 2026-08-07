@@ -3,6 +3,7 @@ from __future__ import annotations
 from ...review_patterns import (
     _heading_word_count,
     _indexes_by_ref_type,
+    _is_illustration_caption,
     _is_implicit_heading_candidate,
     _is_intro_heading,
 )
@@ -31,7 +32,11 @@ def build_scope(chunks: list[str], refs: list[str], sections, total: int) -> lis
         for idx in range(intro_start if intro_start is not None else 0, total)
         if _is_implicit_heading_candidate(idx, chunks, refs)
     ]
-    heading_candidates = sorted(dict.fromkeys([*typed, *section_starts, *implicit]))
+    heading_candidates = sorted(
+        idx
+        for idx in dict.fromkeys([*typed, *section_starts, *implicit])
+        if 0 <= idx < len(chunks) and not _is_illustration_caption(chunks[idx])
+    )
     if not heading_candidates:
         return typed or list(range(max(1, int(total * 0.20))))
 

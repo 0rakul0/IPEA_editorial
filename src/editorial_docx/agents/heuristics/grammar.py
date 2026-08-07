@@ -53,12 +53,6 @@ def heuristic_grammar_comments(batch_indexes: list[int], chunks: list[str], refs
         # Artigo definido ausente após "todos/as" ("todos trabalhadores" → "todos os trabalhadores")
         if re.search(r"\bpara todos trabalhadores\b", text, flags=re.IGNORECASE):
             add(idx, "para todos trabalhadores", "para todos os trabalhadores", "Falta artigo definido antes do substantivo.", "Concordância")
-        for match in re.finditer(r"\btod[ao]s ([a-zà-ú]+)\b", text, flags=re.IGNORECASE):
-            raw = match.group(0)
-            gender = "as" if raw[:4].lower() == "todas" else "os"
-            noun = match.group(1)
-            fix = f"tod{gender[:1]}s {gender} {noun}"
-            add(idx, raw, fix, "Falta artigo definido após o pronome.", "Concordância")
 
         # Partícula expletiva dispensável ("observa-se que")
         if re.search(r"\bobserva-se\s+que\b", text, flags=re.IGNORECASE):

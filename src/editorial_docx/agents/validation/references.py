@@ -125,7 +125,7 @@ def rejection_reason(ctx: ValidationContext) -> str | None:
     if comment.action_type == "author_confirmation":
         if not any(
             token in message_blob
-            for token in {"conferir", "confirmar", "diverge", "divergencia", "divergência", "autoria", "ano"}
+            for token in {"conferir", "confirmar", "diverge", "divergencia", "divergência", "autoria", "ano", "http", "endereço válido", "endereco valido"}
         ):
             return "descartado por regra de verificação"
     return None

@@ -11,6 +11,7 @@ from .structure import heuristic_structure_comments
 from .synopsis import heuristic_synopsis_comments
 from .tables_figures import heuristic_table_figure_comments
 from .typography import heuristic_typography_comments
+from .url_validation import heuristic_broken_url_comments
 
 
 def heuristic_comments_for_agent(
@@ -52,6 +53,7 @@ def heuristic_comments_for_agent(
                 reference_pipeline=reference_pipeline,
             )
         )
+        comments.extend(heuristic_broken_url_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "estrutura":
         comments.extend(heuristic_structure_comments(batch_indexes=batch_indexes, chunks=chunks, refs=refs))
     if agent == "tipografia":

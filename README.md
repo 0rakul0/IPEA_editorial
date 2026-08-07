@@ -22,7 +22,7 @@ Os comentarios produzidos pelos agentes passam por filtros de seguranca e dedupl
 
 ## Agentes
 
-Agentes editoriais atualmente ativos:
+Agentes editoriais da execução padrão:
 
 - `sinopse_abstract`
 - `gramatica_ortografia`
@@ -31,6 +31,8 @@ Agentes editoriais atualmente ativos:
 - `tipografia`
 - `referencias`
 - `comentarios_usuario_referencias`
+
+O agente `coerencia_logica` está disponível como experimental e opt-in, enquanto é calibrado com uma base adjudicada.
 
 Organizacao do codigo:
 
@@ -278,6 +280,69 @@ ci_access:
 
 O valor de `KUBE_CONTEXT` será o contexto exposto pelo agente Kubernetes configurado no projeto
 `ipearev/k8s-agents`.
+
+### Roteiro completo de publicação e subida
+
+1. **Validar o código antes de publicar**
+
+   ```powershell
+   uv sync --frozen --dev
+   uv run pytest -q
+   uv run python -m compileall streamlit_app.py paginas src/editorial_docx
+   ```
+
+2. **Testar a imagem localmente**
+
+   Copie `.env.docker.example` para `.env.docker`, preencha apenas as credenciais do provedor
+   escolhido e execute:
+
+   ```powershell
+   docker compose --env-file .env.docker up --build
+   ```
+
+   Confirme em `http://localhost:8501` que o upload, a seleção de modelo e o download do resultado
+   funcionam. Não versione `.env.docker`, `.env`, documentos de teste ou resultados de revisão.
+
+3. **Preparar o namespace Kubernetes**
+
+   Crie uma vez o secret de execução, a partir do arquivo local de ambiente:
+
+   ```powershell
+   kubectl -n <namespace> create secret generic ipearev-runtime `
+     --from-env-file=.env.docker
+   ```
+
+   Crie também o secret de pull do Registry, o certificado TLS indicado por `K8S_TLS_SECRET` e
+   autorize o projeto `ipearev/streamlit` no agente do repositório `ipearev/k8s-agents`.
+
+4. **Configurar CI/CD no GitLab**
+
+   No projeto `ipearev/streamlit`, defina as variáveis protegidas `KUBE_CONTEXT`,
+   `K8S_NAMESPACE`, `K8S_INGRESS_HOST`, `K8S_TLS_SECRET` e
+   `K8S_IMAGE_PULL_SECRET`. A pipeline executa testes, cria a imagem no Container Registry e
+   substitui os marcadores dos manifestos antes de aplicar o deploy.
+
+5. **Publicar**
+
+   Envie para a branch monitorada pelo GitLab. A pipeline só prossegue para deploy se os testes e
+   a construção da imagem concluírem com sucesso. Após o rollout, valide:
+
+   ```powershell
+   kubectl -n <namespace> rollout status deployment/ipearev --timeout=5m
+   kubectl -n <namespace> get pods,service,ingress
+   ```
+
+6. **Rollback**
+
+   Para retornar à revisão anterior da aplicação:
+
+   ```powershell
+   kubectl -n <namespace> rollout undo deployment/ipearev
+   kubectl -n <namespace> rollout status deployment/ipearev --timeout=5m
+   ```
+
+   Para retirar temporariamente a aplicação, use o job manual `stop_app` da pipeline GitLab.
+   Ele remove somente Deployment, Service e Ingress; os Secrets e imagens permanecem preservados.
 
 ### Requisitos
 
