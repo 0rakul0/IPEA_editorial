@@ -34,6 +34,10 @@ deploy:
     name: bitnami/kubectl:latest
     entrypoint: [""]
   needs: [build]
+  rules:
+    - if: '$KUBE_CONTEXT && $K8S_NAMESPACE && $K8S_INGRESS_HOST && $K8S_TLS_SECRET && $K8S_IMAGE_PULL_SECRET'
+      when: on_success
+    - when: never
   environment:
     name: development
     url: https://${K8S_INGRESS_HOST}
@@ -51,6 +55,17 @@ deploy:
     - kubectl apply --namespace "${K8S_NAMESPACE}" -f service.yaml
     - kubectl apply --namespace "${K8S_NAMESPACE}" -f /tmp/ingress.yaml
     - kubectl rollout status --namespace "${K8S_NAMESPACE}" deployment/ipearev --timeout=5m
+
+deploy_configuration_needed:
+  stage: deploy
+  image: alpine:3.20
+  needs: [build]
+  rules:
+    - if: '$KUBE_CONTEXT && $K8S_NAMESPACE && $K8S_INGRESS_HOST && $K8S_TLS_SECRET && $K8S_IMAGE_PULL_SECRET'
+      when: never
+    - when: on_success
+  script:
+    - echo "Deploy nao executado: configure KUBE_CONTEXT, K8S_NAMESPACE, K8S_INGRESS_HOST, K8S_TLS_SECRET e K8S_IMAGE_PULL_SECRET nas variaveis CI/CD do projeto."
 
 stop_app:
   stage: stop
