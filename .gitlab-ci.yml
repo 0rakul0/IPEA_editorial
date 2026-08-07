@@ -65,7 +65,7 @@ deploy_configuration_needed:
       when: never
     - when: on_success
   script:
-    - echo "Deploy nao executado: configure KUBE_CONTEXT, K8S_NAMESPACE, K8S_INGRESS_HOST, K8S_TLS_SECRET e K8S_IMAGE_PULL_SECRET nas variaveis CI/CD do projeto."
+    - 'echo "Deploy nao executado: configure KUBE_CONTEXT, K8S_NAMESPACE, K8S_INGRESS_HOST, K8S_TLS_SECRET e K8S_IMAGE_PULL_SECRET nas variaveis CI/CD do projeto."'
 
 stop_app:
   stage: stop
