@@ -232,43 +232,31 @@ arquivos somente leitura; documentos carregados e saídas da interface permanece
 Por isso, em contêiner, a opção **Salvar** credenciais fica desativada; use variáveis de
 ambiente/Secrets do ambiente ou a opção **Usar nesta sessão**.
 
-Para Kubernetes, `deployment.yaml` e `ingress.yaml` são templates. A pipeline GitLab substitui
-`__IMAGE__` e `__INGRESS_HOST__`; os nomes dos secrets usados na implantação são fixos para o
-IPEAREV: `ipearev-runtime`, `registry-gitlab-ipearev` e `ipea-star-certificate`. Crie o secret
-de runtime no namespace `ipearev`, sem versioná-lo, por exemplo:
-
-```powershell
-kubectl -n ipearev create secret generic ipearev-runtime `
-  --from-env-file=.env.docker
-kubectl -n ipearev apply -f deployment.yaml `
-  -f service.yaml `
-  -f ingress.yaml
-```
-
-`deploy/secret.example.yaml` documenta o formato do Secret, mas não deve receber
-valores reais. Antes do deploy, escolha os limites de CPU/memória e a quantidade de réplicas
-de acordo com o tamanho esperado dos documentos e a concorrência do provedor LLM.
+Para Kubernetes, os manifestos são templates no mesmo formato do projeto RAG. A pipeline
+substitui os marcadores `#CI_PROJECT_ROOT_NAMESPACE#`, `#CI_PROJECT_NAME#`,
+`#CI_REGISTRY_IMAGE#` e `#CI_COMMIT_SHA#` antes de aplicá-los. Para este projeto, o destino é
+o namespace `ipearev-streamlit`, a imagem usa o secret `registry-gitlab-ipearev` e o Ingress
+recebe o endereço `https://ipearev-streamlit-dev.ipea.gov.br`.
 
 ### CI/CD GitLab
 
 > **Configuração própria do IPEAREV.** Para o projeto `ipearev/streamlit`, o agente é
-> `ipearev/k8s-agents`, o contexto é `ipearev/k8s-agents:ipearev`, o namespace é
-> `ipearev` e o endereço é `https://ipearev.ipea.gov.br`. Os secrets esperados no
-> namespace são `ipearev-runtime`, `registry-gitlab-ipearev` e `ipea-star-certificate`.
+> `ipearev/k8s-agents` e o contexto é `ipearev/k8s-agents:ipearev`. A pipeline deriva o
+> namespace `ipearev-streamlit` e o endereço `https://ipearev-streamlit-dev.ipea.gov.br`
+> a partir de `CI_PROJECT_ROOT_NAMESPACE` e `CI_PROJECT_NAME`.
 >
-> Não crie `KUBE_CONTEXT`, `K8S_NAMESPACE`, `K8S_INGRESS_HOST`, `K8S_TLS_SECRET` ou
-> `K8S_IMAGE_PULL_SECRET` no projeto. A pipeline usa os valores acima diretamente.
+> O namespace precisa conter os secrets `registry-gitlab-ipearev` e
+> `ipea-star-certificate`.
 > É obrigatório adicionar `- id: ipearev/streamlit` ao `ci_access.projects` do agente
 > no repositório `ipearev/k8s-agents`.
 
-O arquivo `.gitlab-ci.yml` testa, gera a imagem com Kaniko, publica no Registry do próprio
-projeto e implanta os templates pelo agente Kubernetes configurado acima.
+O arquivo `.gitlab-ci.yml` gera a imagem com Kaniko, publica no Registry do próprio projeto e
+implanta os templates pelo agente Kubernetes configurado acima.
 
 O destino definido para este projeto é **`ipearev/streamlit`**. Portanto, envie o
 repositório com esse caminho no GitLab antes de ativar o pipeline.
 
-O namespace deve conter o Secret `ipearev-runtime`, com a configuração do provedor LLM. A
-autorização do agente Kubernetes é mantida no projeto separado `ipearev/k8s-agents` e deve
+A autorização do agente Kubernetes é mantida no projeto separado `ipearev/k8s-agents` e deve
 incluir:
 
 ```yaml
@@ -303,30 +291,23 @@ Não são necessárias variáveis de infraestrutura no projeto GitLab.
 
 3. **Preparar o namespace Kubernetes**
 
-   Crie uma vez o secret de execução, a partir do arquivo local de ambiente:
-
-   ```powershell
-   kubectl -n ipearev create secret generic ipearev-runtime `
-     --from-env-file=.env.docker
-   ```
-
-   No namespace `ipearev`, crie ou clone os secrets `registry-gitlab-ipearev` e
-   `ipea-star-certificate`; autorize também o projeto `ipearev/streamlit` no agente do
+   Crie o namespace `ipearev-streamlit` e, nele, clone os secrets `registry-gitlab-ipearev` e
+   `ipea-star-certificate`. Autorize também o projeto `ipearev/streamlit` no agente do
    repositório `ipearev/k8s-agents`.
 
 4. **Configurar CI/CD no GitLab**
 
-   Não cadastre variáveis de infraestrutura no projeto. A pipeline usa o contexto, namespace,
-   host e secrets definidos acima; ela valida a presença dos secrets antes de aplicar o deploy.
+   Não cadastre variáveis de infraestrutura no projeto. A pipeline usa o contexto do agente e
+   deriva namespace, host e nomes dos recursos a partir do projeto GitLab.
 
 5. **Publicar**
 
-   Envie para a branch monitorada pelo GitLab. A pipeline só prossegue para deploy se os testes e
-   a construção da imagem concluírem com sucesso. Após o rollout, valide:
+   Envie para a branch monitorada pelo GitLab. A pipeline constrói a imagem e então faz o deploy.
+   Após o rollout, valide:
 
    ```powershell
-   kubectl -n ipearev rollout status deployment/ipearev --timeout=5m
-   kubectl -n ipearev get pods,service,ingress
+   kubectl -n ipearev-streamlit rollout status deployment/streamlit --timeout=5m
+   kubectl -n ipearev-streamlit get pods,service,ingress
    ```
 
 6. **Rollback**
@@ -334,8 +315,8 @@ Não são necessárias variáveis de infraestrutura no projeto GitLab.
    Para retornar à revisão anterior da aplicação:
 
    ```powershell
-   kubectl -n ipearev rollout undo deployment/ipearev
-   kubectl -n ipearev rollout status deployment/ipearev --timeout=5m
+   kubectl -n ipearev-streamlit rollout undo deployment/streamlit
+   kubectl -n ipearev-streamlit rollout status deployment/streamlit --timeout=5m
    ```
 
    Para retirar temporariamente a aplicação, use o job manual `stop_app` da pipeline GitLab.

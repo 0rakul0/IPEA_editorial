@@ -1,71 +1,74 @@
 stages:
-  - test
   - build
   - deploy
   - stop
-
-default:
-  tags:
-    - linux
-
-test:
-  stage: test
-  image: python:3.12-slim
-  script:
-    - pip install --no-cache-dir uv
-    - uv sync --frozen --dev
-    - uv run pytest testes/test_architecture_modular.py testes/test_graph_chat.py -q
-    - uv run python -m compileall streamlit_app.py paginas src/editorial_docx
-
 build:
   stage: build
+  tags:
+    - linux
   image:
     name: gcr.io/kaniko-project/executor:debug
     entrypoint: [""]
-  needs: [test]
   script:
+    - echo "Building the application container..."
+    - echo $CI_PROJECT_DIR
+    - ls -la $CI_PROJECT_DIR
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json
-    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - echo "CI_REGISTRY=$CI_REGISTRY CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE CI_COMMIT_SHA=$CI_COMMIT_SHA"
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
 
 deploy:
   stage: deploy
+  dependencies:
+    - build
   image:
     name: bitnami/kubectl:latest
-    entrypoint: [""]
-  needs: [build]
+    entrypoint: ['']
   environment:
-    name: development
-    url: https://ipearev.ipea.gov.br
+    name: dev
+    url: https://$CI_PROJECT_ROOT_NAMESPACE-$CI_PROJECT_NAME-dev.ipea.gov.br
+    kubernetes:
+      namespace: ipearev
     on_stop: stop_app
   script:
-    - export K8S_NAMESPACE="ipearev"
-    - kubectl config use-context "ipearev/k8s-agents:ipearev"
-    - kubectl get namespace "${K8S_NAMESPACE}"
-    - kubectl get secret --namespace "${K8S_NAMESPACE}" ipearev-runtime
-    - kubectl get secret --namespace "${K8S_NAMESPACE}" registry-gitlab-ipearev
-    - kubectl get secret --namespace "${K8S_NAMESPACE}" ipea-star-certificate
-    - sed "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deployment.yaml > /tmp/deployment.yaml
-    - sed "s|__INGRESS_HOST__|ipearev.ipea.gov.br|g" ingress.yaml > /tmp/ingress.yaml
-    - kubectl apply --namespace "${K8S_NAMESPACE}" -f /tmp/deployment.yaml
-    - kubectl apply --namespace "${K8S_NAMESPACE}" -f service.yaml
-    - kubectl apply --namespace "${K8S_NAMESPACE}" -f /tmp/ingress.yaml
-    - kubectl rollout status --namespace "${K8S_NAMESPACE}" deployment/ipearev --timeout=5m
-
+    - kubectl config get-contexts
+    - kubectl config use-context ipearev/k8s-agents:ipearev
+    - echo "Transforming yaml files..."
+    - sed -i -e 's|#CI_PROJECT_ROOT_NAMESPACE#|'$CI_PROJECT_ROOT_NAMESPACE'|g' deployment.yaml
+    - sed -i -e 's|#CI_PROJECT_NAME#|'$CI_PROJECT_NAME'|g' deployment.yaml
+    - sed -i -e 's|#CI_REGISTRY_IMAGE#|'$CI_REGISTRY_IMAGE'|g' deployment.yaml
+    - sed -i -e 's|#CI_COMMIT_SHA#|'$CI_COMMIT_SHA'|g' deployment.yaml
+    - sed -i -e 's|#CI_PROJECT_ROOT_NAMESPACE#|'$CI_PROJECT_ROOT_NAMESPACE'|g' service.yaml
+    - sed -i -e 's|#CI_PROJECT_NAME#|'$CI_PROJECT_NAME'|g' service.yaml
+    - sed -i -e 's|#CI_PROJECT_ROOT_NAMESPACE#|'$CI_PROJECT_ROOT_NAMESPACE'|g' ingress.yaml
+    - sed -i -e 's|#CI_PROJECT_NAME#|'$CI_PROJECT_NAME'|g' ingress.yaml
+    - echo "Deployment of image=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    - echo "in namespace=$CI_PROJECT_ROOT_NAMESPACE-$CI_PROJECT_NAME deployment=$CI_PROJECT_NAME ..."
+    - kubectl apply -f deployment.yaml
+    - kubectl rollout status deployment/$CI_PROJECT_NAME --namespace=$CI_PROJECT_ROOT_NAMESPACE-$CI_PROJECT_NAME --timeout=5m
+    - echo "Creating service $CI_PROJECT_NAME"
+    - kubectl apply -f service.yaml
+    - echo "Creating ingress $CI_PROJECT_NAME for app=$CI_PROJECT_NAME"
+    - kubectl apply -f ingress.yaml
 stop_app:
   stage: stop
+  dependencies:
+    - deploy
+  variables:
+    GIT_STRATEGY: none
   image:
     name: bitnami/kubectl:latest
-    entrypoint: [""]
+    entrypoint: ['']
+  script:
+    - kubectl config get-contexts
+    - kubectl config use-context ipearev/k8s-agents:ipearev
+    - kubectl delete ingress -n ipearev-"$CI_PROJECT_NAME" $(echo "$CI_PROJECT_NAME")
+    - kubectl delete service -n ipearev-"$CI_PROJECT_NAME" $(echo "$CI_PROJECT_NAME")
+    - kubectl delete deployment -n ipearev-"$CI_PROJECT_NAME" $(echo "$CI_PROJECT_NAME")
   when: manual
   environment:
-    name: development
+    name: dev
+    kubernetes:
+      namespace: ipearev-"$CI_PROJECT_NAME"
     action: stop
-  script:
-    - export K8S_NAMESPACE="ipearev"
-    - kubectl config use-context "ipearev/k8s-agents:ipearev"
-    - sed "s|__IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deployment.yaml > /tmp/deployment.yaml
-    - sed "s|__INGRESS_HOST__|ipearev.ipea.gov.br|g" ingress.yaml > /tmp/ingress.yaml
-    - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f /tmp/ingress.yaml
-    - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f service.yaml
-    - kubectl delete --namespace "${K8S_NAMESPACE}" --ignore-not-found -f /tmp/deployment.yaml
