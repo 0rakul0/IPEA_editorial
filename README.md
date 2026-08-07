@@ -202,7 +202,7 @@ Observacao: aqui as ramificacoes representam produtos derivados do matcher e do 
 
 ## Execução em contêiner e deploy
 
-O projeto já está organizado para ser enviado diretamente ao projeto GitLab `ipearev/ipearev`:
+O projeto já está organizado para ser enviado diretamente ao projeto GitLab `ipearev/streamlit`:
 
 ```text
 .
@@ -232,16 +232,15 @@ arquivos somente leitura; documentos carregados e saídas da interface permanece
 Por isso, em contêiner, a opção **Salvar** credenciais fica desativada; use variáveis de
 ambiente/Secrets do ambiente ou a opção **Usar nesta sessão**.
 
-Para Kubernetes, ajuste a imagem e o host em `deployment.yaml` e `ingress.yaml`.
-Os dois arquivos são templates: `__IMAGE__`,
-`__IMAGE_PULL_SECRET__`, `__INGRESS_HOST__` e `__TLS_SECRET__` são substituídos pelo
-pipeline GitLab, não editados com valores do ambiente. Crie o secret de runtime no namespace
-sem versioná-lo, por exemplo:
+Para Kubernetes, `deployment.yaml` e `ingress.yaml` são templates. A pipeline GitLab substitui
+`__IMAGE__` e `__INGRESS_HOST__`; os nomes dos secrets usados na implantação são fixos para o
+IPEAREV: `ipearev-runtime`, `registry-gitlab-ipearev` e `ipea-star-certificate`. Crie o secret
+de runtime no namespace `ipearev`, sem versioná-lo, por exemplo:
 
 ```powershell
-kubectl -n <namespace> create secret generic ipearev-runtime `
+kubectl -n ipearev create secret generic ipearev-runtime `
   --from-env-file=.env.docker
-kubectl -n <namespace> apply -f deployment.yaml `
+kubectl -n ipearev apply -f deployment.yaml `
   -f service.yaml `
   -f ingress.yaml
 ```
@@ -307,7 +306,7 @@ Não são necessárias variáveis de infraestrutura no projeto GitLab.
    Crie uma vez o secret de execução, a partir do arquivo local de ambiente:
 
    ```powershell
-   kubectl -n <namespace> create secret generic ipearev-runtime `
+   kubectl -n ipearev create secret generic ipearev-runtime `
      --from-env-file=.env.docker
    ```
 
@@ -326,8 +325,8 @@ Não são necessárias variáveis de infraestrutura no projeto GitLab.
    a construção da imagem concluírem com sucesso. Após o rollout, valide:
 
    ```powershell
-   kubectl -n <namespace> rollout status deployment/ipearev --timeout=5m
-   kubectl -n <namespace> get pods,service,ingress
+   kubectl -n ipearev rollout status deployment/ipearev --timeout=5m
+   kubectl -n ipearev get pods,service,ingress
    ```
 
 6. **Rollback**
@@ -335,8 +334,8 @@ Não são necessárias variáveis de infraestrutura no projeto GitLab.
    Para retornar à revisão anterior da aplicação:
 
    ```powershell
-   kubectl -n <namespace> rollout undo deployment/ipearev
-   kubectl -n <namespace> rollout status deployment/ipearev --timeout=5m
+   kubectl -n ipearev rollout undo deployment/ipearev
+   kubectl -n ipearev rollout status deployment/ipearev --timeout=5m
    ```
 
    Para retirar temporariamente a aplicação, use o job manual `stop_app` da pipeline GitLab.
